@@ -1,0 +1,20 @@
+menu "XIAO SIP Phone"
+
+    config SIP_PHONE_WIFI_SSID
+        string "First-boot Wi-Fi SSID"
+        default ""
+        help
+            SSID written to NVS the first time the device boots with no stored
+            configuration. Leave empty to provision later through the web UI
+            (once it exists) or by flashing a config. Changing this value does
+            not alter an NVS configuration that has already been created.
+            Never commit real credentials to a shared sdkconfig.defaults.
+
+    config SIP_PHONE_WIFI_PASSWORD
+        string "First-boot Wi-Fi password"
+        default ""
+        help
+            Password stored in plain text in NVS alongside the SSID. Leave empty
+            for an open network. Enable NVS encryption before deploying.
+
+endmenu

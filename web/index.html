@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>XIAO SIP Phone</title>
+  <link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+  <header>
+    <div>
+      <h1>XIAO ESP32-S3 SIP Phone</h1>
+      <p class="subtitle" id="st-device">Loading&hellip;</p>
+    </div>
+    <nav class="tabs">
+      <button type="button" class="tab active" data-tab="dashboard">Dashboard</button>
+      <button type="button" class="tab" data-tab="wifi">Wi-Fi</button>
+      <button type="button" class="tab" data-tab="sip">SIP</button>
+      <button type="button" class="tab" data-tab="audio">Audio</button>
+      <button type="button" class="tab" data-tab="system">System</button>
+    </nav>
+  </header>
+
+  <main>
+    <section class="panel active" data-panel="dashboard">
+      <div class="grid">
+        <article class="card">
+          <h2>Network</h2>
+          <dl>
+            <dt>Wi-Fi</dt><dd id="st-wifi">&mdash;</dd>
+            <dt>IP address</dt><dd id="st-ip">&mdash;</dd>
+            <dt>RSSI</dt><dd id="st-rssi">&mdash;</dd>
+            <dt>Setup AP</dt><dd id="st-ap">&mdash;</dd>
+          </dl>
+        </article>
+        <article class="card">
+          <h2>Telephony</h2>
+          <dl>
+            <dt>Extension</dt><dd id="st-ext">&mdash;</dd>
+            <dt>SIP server</dt><dd id="st-server">&mdash;</dd>
+            <dt>SIP state</dt><dd id="st-sip">&mdash;</dd>
+            <dt>Call</dt><dd id="st-call">&mdash;</dd>
+          </dl>
+        </article>
+        <article class="card">
+          <h2>System</h2>
+          <dl>
+            <dt>Uptime</dt><dd id="st-uptime">&mdash;</dd>
+            <dt>Free heap</dt><dd id="st-heap">&mdash;</dd>
+            <dt>Free PSRAM</dt><dd id="st-psram">&mdash;</dd>
+            <dt>Firmware</dt><dd>0.1.0-scaffold</dd>
+          </dl>
+        </article>
+      </div>
+      <p class="note">The SIP/RTP stack is not implemented yet, so SIP state stays unregistered and calls cannot be placed.</p>
+    </section>
+
+    <section class="panel" data-panel="wifi">
+      <article class="card">
+        <h2>Wi-Fi station</h2>
+        <form id="wifi-form">
+          <label>SSID <input id="wifi_ssid" autocomplete="off" required /></label>
+          <label>Password <input id="wifi_password" type="password" autocomplete="new-password" placeholder="unchanged" /></label>
+          <label class="check"><input id="wifi_dhcp" type="checkbox" /> Use DHCP</label>
+          <div class="row">
+            <label>Static IP <input id="wifi_ip" autocomplete="off" /></label>
+            <label>Netmask <input id="wifi_netmask" autocomplete="off" /></label>
+          </div>
+          <div class="row">
+            <label>Gateway <input id="wifi_gateway" autocomplete="off" /></label>
+            <label>DNS <input id="wifi_dns" autocomplete="off" /></label>
+          </div>
+          <button type="submit">Save Wi-Fi</button>
+        </form>
+        <p class="note">Saving restarts the station. If it cannot connect, the open setup AP <strong>esp32SipPhone</strong> appears at http://192.168.4.1.</p>
+      </article>
+    </section>
+
+    <section class="panel" data-panel="sip">
+      <article class="card">
+        <h2>SIP account</h2>
+        <form id="sip-form">
+          <div class="row">
+            <label>SIP server <input id="sip_server" autocomplete="off" required /></label>
+            <label>Port <input id="sip_port" type="number" min="1" max="65535" required /></label>
+          </div>
+          <div class="row">
+            <label>Username <input id="sip_username" autocomplete="off" /></label>
+            <label>Auth ID <input id="sip_auth_id" autocomplete="off" /></label>
+          </div>
+          <label>Password <input id="sip_password" type="password" autocomplete="new-password" placeholder="unchanged" /></label>
+          <div class="row">
+            <label>Extension <input id="sip_extension" autocomplete="off" required /></label>
+            <label>Display name <input id="sip_display_name" autocomplete="off" /></label>
+          </div>
+          <div class="row">
+            <label>Transport
+              <select id="sip_transport">
+                <option value="udp">UDP</option>
+                <option value="tcp">TCP</option>
+              </select>
+            </label>
+            <label>Registration expiry (s) <input id="sip_expiry" type="number" min="30" max="3600" /></label>
+          </div>
+          <div class="row">
+            <label>Outbound proxy <input id="sip_outbound_proxy" autocomplete="off" /></label>
+            <label>STUN server <input id="sip_stun" autocomplete="off" /></label>
+          </div>
+          <label class="check"><input id="sip_prefer_pcma" type="checkbox" /> Prefer PCMA over PCMU</label>
+          <button type="submit">Save SIP</button>
+        </form>
+        <p class="note">Settings are persisted to NVS, but no SIP stack is linked yet. Registration and calls remain unavailable.</p>
+      </article>
+    </section>
+
+    <section class="panel" data-panel="audio">
+      <article class="card">
+        <h2>Audio</h2>
+        <form id="audio-form">
+          <div class="row">
+            <label>Mic gain (dB, -24..24) <input id="audio_mic_gain" type="number" min="-24" max="24" /></label>
+            <label>Speaker volume (0..100) <input id="audio_volume" type="number" min="0" max="100" /></label>
+          </div>
+          <div class="row">
+            <label>Jitter buffer (frames) <input id="audio_jitter" type="number" min="2" max="50" /></label>
+          </div>
+          <label class="check"><input id="audio_nr" type="checkbox" /> Noise reduction</label>
+          <label class="check"><input id="audio_aec" type="checkbox" /> Echo cancellation</label>
+          <button type="submit">Save audio</button>
+        </form>
+        <p class="note">Noise reduction and AEC are stored as preferences only; the DSP stage is not implemented.</p>
+      </article>
+    </section>
+
+    <section class="panel" data-panel="system">
+      <article class="card">
+        <h2>Device</h2>
+        <form id="system-form">
+          <div class="row">
+            <label>Device name <input id="sys_device_name" autocomplete="off" /></label>
+            <label>Hostname <input id="sys_hostname" autocomplete="off" /></label>
+          </div>
+          <div class="row">
+            <label>Web user <input id="sys_web_user" autocomplete="username" /></label>
+            <label>Web password <input id="sys_web_password" type="password" autocomplete="new-password" placeholder="unchanged" /></label>
+          </div>
+          <button type="submit">Save device settings</button>
+        </form>
+      </article>
+      <article class="card">
+        <h2>Actions</h2>
+        <div class="actions">
+          <button type="button" id="reboot-btn">Reboot</button>
+          <button type="button" id="factory-btn" class="danger">Factory reset</button>
+        </div>
+        <p class="note">Factory reset erases all stored configuration (including Wi-Fi and SIP) and restarts.</p>
+      </article>
+    </section>
+  </main>
+
+  <div id="toast" class="toast"></div>
+  <script src="/app.js"></script>
+</body>
+</html>

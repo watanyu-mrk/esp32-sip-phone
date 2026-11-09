@@ -1,0 +1,733 @@
+# PROJECT: ESP32-S3 SIP IP PHONE
+
+## 1. บทบาทของ AI Agent
+
+คุณคือ Senior Embedded Systems Engineer ผู้เชี่ยวชาญด้าน ESP32-S3, ESP-IDF, VoIP, SIP Protocol, RTP Audio Streaming, Digital Audio Processing, FreeRTOS และ Embedded Web Server
+
+ภารกิจของคุณคือออกแบบและพัฒนาระบบ **SIP IP Phone บนบอร์ด XIAO ESP32-S3 Sense** ให้สามารถโทรเข้าและโทรออกผ่าน SIP Protocol ไปยัง IP PBX เช่น FreePBX หรือ Asterisk ได้จริง
+
+ต้องพัฒนาเป็นระบบที่สามารถ Build, Flash, Debug และทดสอบการทำงานบนฮาร์ดแวร์จริงได้
+
+ห้ามสร้างเพียงตัวอย่างโค้ดหรือจำลองการทำงาน ต้องพัฒนาระบบที่สามารถใช้งาน SIP Registration, Call Signaling, RTP Audio และ Two-way Audio ได้จริง
+
+---
+
+## 2. Hardware Specification
+
+บอร์ดหลัก:
+
+- Board: Seeed Studio XIAO ESP32-S3 Sense
+- MCU: ESP32-S3
+- Flash: ตามสเปกของบอร์ด
+- PSRAM: ตรวจสอบและเปิดใช้งานตามฮาร์ดแวร์จริง
+- Wi-Fi: 2.4GHz
+- Framework: ESP-IDF
+- Language: C/C++
+
+### 2.1 Audio Output (I2S)
+
+กำหนด GPIO ดังนี้
+
+```c
+#define I2S_DOUT  7
+#define I2S_BCLK  8
+#define I2S_LRC   9
+```
+
+หน้าที่:
+- ส่งเสียงจาก RTP Audio ไปยัง I2S Output
+- รองรับเสียงสนทนาแบบ Real-time
+- รองรับ Audio Buffer และ DMA
+- ป้องกันเสียงสะดุดและเสียงขาดช่วง
+- รองรับการปรับ Volume ผ่าน Web Configuration
+
+หมายเหตุ: ต้องตรวจสอบการใช้งาน GPIO7, GPIO8 และ GPIO9 ร่วมกับวงจร microSD และห้ามเปิด SD SPI Driver มารบกวนการทำงานของ I2S
+
+### 2.2 Audio Input (PDM Microphone)
+
+ใช้ไมโครโฟน Digital PDM ที่ติดตั้งบน XIAO ESP32-S3 Sense
+
+```c
+#define PDM_DATA 41
+#define PDM_CLK  42
+```
+
+หน้าที่:
+- รับเสียงจากไมโครโฟน
+- แปลง PDM เป็น PCM
+- ส่งเสียง PCM ไปยัง RTP Encoder
+- รองรับการสนทนาแบบ Full Duplex
+- มีระบบปรับ Microphone Gain
+- มีระบบ Noise Reduction ตามความเหมาะสม
+
+ต้องตรวจสอบ I2S PDM RX Configuration ให้ตรงกับ ESP32-S3 และ ESP-IDF เวอร์ชันที่เลือก
+
+### 2.3 Hardware Buttons
+
+กำหนดปุ่ม 2 ปุ่ม
+
+```c
+#define BUTTON_ANSWER  3
+#define BUTTON_HANGUP  2
+```
+
+การทำงาน:
+
+**ปุ่ม ANSWER (GPIO3)**
+- เมื่อมีสายเรียกเข้า กดเพื่อรับสาย
+- เมื่อไม่มีสายเรียกเข้า สามารถใช้เป็นปุ่มโทรออกหรือเรียกหมายเลขที่ตั้งไว้ได้ตามการออกแบบ UI
+
+**ปุ่ม HANGUP (GPIO2)**
+- ขณะสนทนา กดเพื่อวางสาย
+- ขณะกำลังโทรออก กดเพื่อยกเลิกการโทร
+- ขณะมีสายเข้า กดเพื่อปฏิเสธสาย
+
+ข้อกำหนด:
+- รองรับ Debounce
+- รองรับ Long Press ตามความเหมาะสม
+- ตรวจสอบ GPIO3 ซึ่งเป็น Strapping Pin
+- กำหนด Pull-up/Pull-down ให้เหมาะสมกับวงจรจริง
+- ห้ามทำให้บอร์ดบูตไม่ขึ้นเมื่อกดปุ่มค้าง
+
+---
+
+## 3. SIP VoIP System
+
+พัฒนาระบบ SIP Phone ที่รองรับมาตรฐาน SIP Protocol
+
+### 3.1 SIP Registration
+
+ต้องรองรับการลงทะเบียนกับ SIP Server โดยกำหนดค่าได้จาก Web Browser
+
+ข้อมูลที่ต้องตั้งค่า:
+
+- SIP Server IP / Domain
+- SIP Server Port
+- SIP Username
+- SIP Password
+- SIP Authentication Username
+- SIP Display Name
+- SIP Extension Number
+- SIP Transport Protocol
+- Registration Expiration
+- STUN Server (Optional)
+- Outbound Proxy (Optional)
+
+ความสามารถ:
+- Register SIP Account
+- Unregister
+- ตรวจสอบสถานะ Registration
+- Auto Register เมื่อเปิดเครื่อง
+- Auto Re-register เมื่อหมดอายุ
+- Reconnect เมื่อ Wi-Fi หรือ SIP Server หลุด
+- แสดง Error Code เมื่อ Registration ไม่สำเร็จ
+
+### 3.2 SIP Protocol
+
+ต้องรองรับ SIP Methods ที่จำเป็น:
+
+- REGISTER
+- INVITE
+- ACK
+- CANCEL
+- BYE
+- OPTIONS
+- PRACK (ถ้าจำเป็น)
+- INFO (ถ้าจำเป็น)
+- REFER (Optional)
+
+รองรับ:
+- SIP UDP เป็นค่าเริ่มต้น
+- SIP TCP เป็นตัวเลือก
+- SIP Authentication ตาม RFC 3261 และ Digest Authentication
+- Session Timer ตามความเหมาะสม
+- DTMF RFC2833/RFC4733
+- SIP Keepalive
+- SIP Response Timeout
+- Call State Management
+
+ต้องเลือก SIP Stack ที่สามารถทำงานบน ESP32-S3 ได้จริง โดยตรวจสอบความเข้ากันได้กับ ESP-IDF ก่อนเลือกใช้งาน เช่น PJSIP หรือ SIP Stack ที่มีการรองรับ ESP32-S3 อย่างเหมาะสม
+
+ห้ามสร้าง SIP Parser หรือ SIP Registration แบบจำลองเพื่อใช้แทน SIP Stack จริงโดยไม่มีเหตุผลทางเทคนิค
+
+### 3.3 Call Function
+
+รองรับการโทรดังนี้
+
+**Outgoing Call**
+1. ผู้ใช้สั่งโทรออก
+2. ส่ง SIP INVITE
+3. รอ SIP Response
+4. รองรับ 100 Trying
+5. รองรับ 180 Ringing
+6. รองรับ 183 Session Progress
+7. รองรับ 200 OK
+8. ส่ง ACK
+9. เริ่ม RTP Audio
+10. สนทนาแบบ Two-way Audio
+11. กดปุ่ม Hangup ส่ง BYE
+
+**Incoming Call**
+1. รับ SIP INVITE
+2. ตรวจสอบข้อมูลผู้โทร
+3. ส่ง SIP 180 Ringing
+4. รอผู้ใช้กด Answer
+5. ส่ง SIP 200 OK
+6. รอ ACK
+7. เริ่ม RTP Audio
+8. สนทนาแบบ Two-way Audio
+9. กด Hangup ส่ง BYE
+
+รองรับกรณี:
+- สายไม่ว่าง
+- ปฏิเสธสาย
+- ไม่มีผู้รับสาย
+- Server ไม่ตอบสนอง
+- Network Disconnect
+- SIP Authentication Failed
+- Call Timeout
+
+---
+
+## 4. RTP Audio System
+
+ระบบเสียงเป็นส่วนสำคัญที่สุดของโครงการ ต้องออกแบบให้สามารถสนทนาได้จริง
+
+### 4.1 Audio Architecture
+
+ออกแบบระบบเสียงดังนี้
+
+Microphone PDM
+→ I2S PDM RX
+→ PDM to PCM
+→ Audio Processing
+→ RTP Audio Encoder
+→ RTP UDP
+→ SIP Server / Remote Phone
+
+ขารับเสียง:
+
+RTP UDP
+→ RTP Jitter Buffer
+→ Audio Decoder
+→ PCM
+→ I2S TX
+→ Audio Output
+
+### 4.2 Audio Codec
+
+รองรับ Codec ดังนี้:
+
+1. G.711 A-law (PCMA)
+2. G.711 μ-law (PCMU)
+
+ให้ใช้ G.711 เป็น Codec หลัก เนื่องจากมีความเหมาะสมกับระบบ IP Phone และมีภาระการประมวลผลต่ำ
+
+กำหนดค่าเริ่มต้น:
+- Sample Rate: 8000 Hz
+- Audio Channels: Mono
+- Codec: PCMU หรือ PCMA
+- RTP Payload Type: ตาม Codec Negotiation
+- Packetization: 20 ms
+- PCM: 16-bit
+
+ต้องตรวจสอบ SIP SDP Negotiation ให้ตรงกับ Codec ที่อีกฝั่งรองรับ
+
+### 4.3 Audio Processing
+
+ต้องมี:
+- RTP Jitter Buffer
+- Packet Loss Handling
+- Audio Buffer Management
+- Audio Gain Control
+- Microphone Gain
+- Output Volume
+- Noise Reduction
+- Echo Cancellation (AEC) หากทรัพยากรและอุปกรณ์เสียงรองรับ
+
+ห้ามออกแบบ Audio Task ให้ทำงานแบบ Blocking จนทำให้ SIP Task หรือ Network Task หยุดทำงาน
+
+ต้องวิเคราะห์ Full Duplex Audio และปัญหาเสียงสะท้อนจากลำโพงกลับเข้าไมโครโฟน
+
+หากต้องใช้ AEC ให้ประเมินความเหมาะสมของ ESP-SR หรือ DSP Library ที่รองรับ ESP32-S3 ก่อนนำมาใช้จริง
+
+---
+
+## 5. Web Configuration Interface
+
+พัฒนา Web Server ภายใน ESP32-S3 เพื่อให้ผู้ดูแลสามารถตั้งค่าระบบผ่าน Web Browser
+
+ไม่ต้องใช้หน้าจอ LCD
+
+ให้สามารถเข้าถึงผ่าน IP Address ของ ESP32 เช่น
+
+http://192.168.4.xxx
+
+### 5.1 Dashboard
+
+หน้า Dashboard แสดงข้อมูล:
+
+- Device Name
+- Device IP Address
+- Wi-Fi SSID
+- Wi-Fi Connection Status
+- Wi-Fi Signal Strength (RSSI)
+- SIP Registration Status
+- SIP Server Address
+- SIP Extension
+- Call Status
+- Remote Caller ID
+- Call Duration
+- Audio Status
+- System Uptime
+- Free Heap
+- PSRAM Usage
+
+ใช้ UI แบบ Responsive รองรับ Desktop, Tablet และ Smartphone
+
+### 5.2 SIP Configuration
+
+หน้า SIP Settings ประกอบด้วย:
+
+- SIP Server
+- SIP Port
+- SIP Username
+- SIP Password
+- Authentication ID
+- Display Name
+- Extension Number
+- Transport (UDP/TCP)
+- Registration Expiration
+- RTP Port Range
+- DTMF Mode
+- Codec Priority
+
+มีปุ่ม:
+- Save Configuration
+- Register
+- Unregister
+- Test SIP Connection
+
+### 5.3 Wi-Fi Configuration
+
+รองรับ:
+- Scan Wi-Fi Networks
+- เลือก SSID
+- Password
+- DHCP
+- Static IP
+- Gateway
+- Subnet Mask
+- DNS
+- Reconnect Wi-Fi
+
+### 5.4 Audio Configuration
+
+ปรับแต่งได้:
+- Microphone Gain
+- Speaker Volume
+- Codec Priority
+- RTP Packetization
+- Jitter Buffer Size
+- Noise Reduction Enable/Disable
+- AEC Enable/Disable
+
+### 5.5 Phone Settings
+
+กำหนด:
+- Extension Number
+- Display Name
+- Default Outgoing Number
+- Auto Answer Enable/Disable
+- Auto Answer Delay
+- Ring Duration
+- Call Timeout
+- DTMF Mode
+
+### 5.6 System Settings
+
+มี:
+- Device Hostname
+- Web Admin Username/Password
+- Reboot Device
+- Factory Reset
+- Firmware Version
+- Firmware OTA Update
+- Configuration Backup/Restore
+
+ข้อกำหนดด้าน Web:
+- ใช้ ESP-IDF HTTP Server
+- ใช้ HTML/CSS/JavaScript
+- แยกไฟล์ Frontend ออกจาก Business Logic
+- ใช้ REST API หรือ WebSocket สำหรับข้อมูล Real-time
+- Password ต้องไม่แสดงกลับมาเป็นข้อความปกติ
+- ป้องกันการเข้าถึง Configuration API โดยไม่ได้รับอนุญาต
+- ใช้ NVS เก็บ Configuration
+- รองรับการเปลี่ยน IP และ Reconnect โดยไม่ทำให้ Configuration สูญหาย
+
+---
+
+## 6. Terminal Logging and Debugging
+
+การแสดงผลทุกสถานะต้องแสดงผ่าน Serial Terminal
+
+ใช้ ESP-IDF Logging System เช่น ESP_LOGI, ESP_LOGW, ESP_LOGE และ ESP_LOGD
+
+กำหนด Tag แยกตาม Module เช่น:
+
+- WIFI
+- SIP
+- RTP
+- AUDIO
+- BUTTON
+- WEB
+- SYSTEM
+- MEMORY
+
+ตัวอย่าง Log:
+
+```text
+========================================
+       ESP32-S3 SIP IP PHONE
+========================================
+
+[BOOT] Device Starting...
+[BOOT] Board: XIAO ESP32-S3 Sense
+[BOOT] ESP-IDF Initialized
+[BOOT] PSRAM: Available
+
+[WIFI] Connecting to WiFi...
+[WIFI] Connected
+[WIFI] IP: 192.168.4.150
+[WIFI] RSSI: -48 dBm
+
+[SIP] Initializing SIP Stack...
+[SIP] Server: 192.168.4.29
+[SIP] Extension: 101
+[SIP] Registering...
+
+[SIP] Registration Successful
+[SIP] State: REGISTERED
+
+[WEB] HTTP Server Started
+[WEB] URL: http://192.168.4.150
+
+[PHONE] Ready
+```
+
+ตัวอย่างเมื่อมีสายเข้า:
+
+```text
+[SIP] Incoming INVITE
+[PHONE] Incoming Call
+[PHONE] Caller: 102
+[PHONE] State: RINGING
+
+[BUTTON] ANSWER PRESSED
+[SIP] Sending 200 OK
+[SIP] ACK Received
+
+[RTP] Audio Session Started
+[AUDIO] Microphone: Active
+[AUDIO] Speaker: Active
+[PHONE] State: CONNECTED
+```
+
+ตัวอย่างเมื่อวางสาย:
+
+```text
+[BUTTON] HANGUP PRESSED
+[SIP] Sending BYE
+[SIP] Call Terminated
+[RTP] Audio Session Stopped
+[AUDIO] Resources Released
+[PHONE] State: IDLE
+```
+
+ต้องมี Log สำหรับ:
+- SIP Request/Response
+- SIP Error Code
+- SDP Negotiation
+- RTP Packet Statistics
+- Audio Buffer Underrun/Overrun
+- Wi-Fi Disconnect
+- Memory Usage
+- Task Watchdog
+- System Exception
+
+ห้ามแสดง SIP Password หรือ Web Password ใน Log
+
+---
+
+## 7. Software Architecture
+
+ออกแบบระบบเป็น Module แยกจากกัน เพื่อให้ง่ายต่อการพัฒนาและ Debug
+
+กำหนดโครงสร้างเบื้องต้น:
+
+```text
+esp32_sip_phone/
+│
+├── CMakeLists.txt
+├── sdkconfig.defaults
+├── partitions.csv
+│
+├── main/
+│   ├── main.c
+│   ├── app_config.h
+│   ├── app_state.h
+│   └── CMakeLists.txt
+│
+├── components/
+│   ├── sip_client/
+│   │   ├── sip_client.c
+│   │   └── sip_client.h
+│   │
+│   ├── rtp_audio/
+│   │   ├── rtp_client.c
+│   │   ├── rtp_client.h
+│   │   ├── rtp_jitter.c
+│   │   └── rtp_jitter.h
+│   │
+│   ├── audio_driver/
+│   │   ├── audio_input.c
+│   │   ├── audio_output.c
+│   │   ├── audio_process.c
+│   │   └── audio_driver.h
+│   │
+│   ├── phone_control/
+│   │   ├── phone_control.c
+│   │   ├── phone_control.h
+│   │   ├── button.c
+│   │   └── button.h
+│   │
+│   ├── wifi_manager/
+│   │   ├── wifi_manager.c
+│   │   └── wifi_manager.h
+│   │
+│   ├── web_server/
+│   │   ├── web_server.c
+│   │   ├── web_api.c
+│   │   └── web_server.h
+│   │
+│   └── config_manager/
+│       ├── config_manager.c
+│       └── config_manager.h
+│
+├── web/
+│   ├── index.html
+│   ├── style.css
+│   └── app.js
+│
+└── README.md
+```
+
+สามารถปรับโครงสร้างได้ตาม Library ที่เลือก แต่ต้องแยก Module ให้ชัดเจน
+
+### FreeRTOS Task
+
+ออกแบบ Task อย่างน้อยดังนี้:
+
+1. SIP Task
+2. RTP Receive Task
+3. Audio Capture Task
+4. Audio Playback Task
+5. Button Task
+6. Web Server Task
+7. Wi-Fi Event Task
+8. System Monitor Task
+
+กำหนด Priority และ Stack Size ให้เหมาะสม
+
+ห้ามใช้ Delay หรือ Blocking Operation ใน Task ที่มีผลต่อ Real-time Audio
+
+ใช้ Queue, Event Group, Mutex และ Ring Buffer ตามความเหมาะสม
+
+ต้องกำหนด Ownership ของ Audio Buffer และ SIP Session ให้ชัดเจน ป้องกัน Race Condition และ Memory Leak
+
+---
+
+## 8. FreePBX Compatibility
+
+ระบบต้องสามารถทำงานร่วมกับ FreePBX / Asterisk ได้
+
+ให้ทดสอบโดยใช้ SIP Extension ที่สร้างไว้ใน FreePBX
+
+ตัวอย่าง Configuration สำหรับทดสอบ:
+
+```text
+SIP Server: 192.168.4.29
+SIP Port: 5060
+Transport: UDP
+Extension: 101
+Username: 101
+Password: Configurable
+Codec: PCMU / PCMA
+RTP: UDP
+```
+
+ค่าดังกล่าวเป็นตัวอย่างสำหรับทดสอบเท่านั้น ต้องสามารถเปลี่ยนแปลงได้ผ่าน Web Browser
+
+ต้องตรวจสอบ:
+- PJSIP Endpoint Configuration
+- Authentication
+- AOR
+- RTP Port
+- Codec Compatibility
+- SDP Negotiation
+- NAT และ Firewall
+- SIP Contact Registration
+
+ต้องไม่สมมติว่า SIP Server ใช้ Port หรือ Codec แบบตายตัว
+
+---
+
+## 9. Security
+
+คำนึงถึงความปลอดภัยของระบบ:
+
+- ป้องกัน Web Configuration ด้วย Authentication
+- ไม่เก็บ Password แบบ Plain Text ใน Log
+- ใช้ NVS สำหรับ Configuration
+- ป้องกัน Unauthorized SIP Calls
+- จำกัดการเข้าถึง Web API
+- รองรับ SIP TLS และ SRTP เป็นแนวทางเพิ่มเติม หาก Library และทรัพยากรรองรับ
+- ตรวจสอบ Input จาก Web API
+- ป้องกันการเปิดเผย SIP Credentials
+
+---
+
+## 10. Development and Testing Requirements
+
+ข้อกำหนดสำคัญที่สุด:
+
+คุณต้องทำงานในลักษณะ Autonomous Development Agent
+
+ห้ามเขียนโค้ดทั้งหมดในครั้งเดียวโดยไม่ทดสอบ
+
+ต้องพัฒนาเป็น Phase และ Build/Test ทุก Phase
+
+### Phase 1: Hardware Validation
+
+- ตรวจสอบ Pin Mapping
+- ตรวจสอบ PDM Microphone
+- ตรวจสอบ I2S Output
+- ตรวจสอบ GPIO Buttons
+- ตรวจสอบ PSRAM
+- ทดสอบ Wi-Fi
+
+ผลลัพธ์ต้องมีรายงานว่าขา GPIO ทุกขาทำงานได้จริงหรือมีข้อจำกัดใด
+
+### Phase 2: Audio Development
+
+- ทดสอบ PDM Microphone
+- แสดง Audio Level ผ่าน Terminal
+- ทดสอบ PCM Conversion
+- ทดสอบ I2S Playback
+- ทดสอบ Full Duplex
+- ตรวจสอบ Audio Buffer
+
+ต้องมีโปรแกรมทดสอบเสียงแยกจาก SIP
+
+### Phase 3: SIP Development
+
+- เชื่อมต่อ SIP Server
+- REGISTER
+- ตรวจสอบ Authentication
+- รับ Incoming INVITE
+- ส่ง Outgoing INVITE
+- ทดสอบ ACK, CANCEL, BYE
+
+ต้องทดสอบ Signaling จริงกับ FreePBX หรือ Asterisk
+
+### Phase 4: RTP Development
+
+- ทดสอบ RTP Send
+- ทดสอบ RTP Receive
+- ทดสอบ PCMU
+- ทดสอบ PCMA
+- ทดสอบ RTP Jitter Buffer
+- ทดสอบ DTMF
+
+### Phase 5: Audio + SIP Integration
+
+- เชื่อมต่อ SIP และ RTP
+- ทดสอบโทรออก
+- ทดสอบรับสาย
+- ทดสอบเสียงพูดสองทาง
+- ทดสอบการวางสาย
+- ตรวจสอบ Latency และ Packet Loss
+
+### Phase 6: Web Interface
+
+- สร้าง Dashboard
+- สร้าง SIP Configuration
+- สร้าง Wi-Fi Configuration
+- สร้าง Audio Configuration
+- เชื่อมต่อ Web API กับ Firmware
+- ทดสอบการบันทึก Configuration
+
+### Phase 7: System Integration
+
+- ทดสอบ Auto Registration
+- ทดสอบ Reconnect
+- ทดสอบการ Reboot
+- ทดสอบ Factory Reset
+- ทดสอบ Memory Stability
+- ทดสอบโทรต่อเนื่อง
+- ทดสอบการรับสายและโทรออกหลายรอบ
+
+### Phase 8: Final Release
+
+ต้องส่งมอบ:
+1. Source Code ทั้งหมด
+2. ESP-IDF Project ที่ Build ได้จริง
+3. Firmware Binary
+4. Flash Instructions
+5. Hardware Wiring Diagram
+6. README.md
+7. Configuration Guide
+8. Testing Report
+9. Known Issues
+10. Troubleshooting Guide
+
+---
+
+## 11. Mandatory Rules for AI Agent
+
+1. ก่อนเขียนโค้ดต้องตรวจสอบ Hardware และ ESP-IDF Version
+2. ต้องตรวจสอบ Library Compatibility ก่อนติดตั้ง
+3. ต้องเลือก SIP Stack ที่สามารถทำงานบน ESP32-S3 ได้จริง
+4. ห้ามใช้ Library ที่ไม่มีการตรวจสอบความเข้ากันได้
+5. ห้าม Mock SIP หรือ RTP แล้วอ้างว่าระบบโทรได้จริง
+6. ทุก Phase ต้อง Build ผ่านก่อนดำเนินการต่อ
+7. ต้องทดสอบโค้ดบนบอร์ดจริงเมื่อมีอุปกรณ์พร้อม
+8. หากทดสอบบนฮาร์ดแวร์จริงไม่ได้ ต้องรายงานว่าเป็นการทดสอบแบบใด ห้ามอ้างว่าผ่านการทดสอบจริง
+9. ต้องแก้ไข Compilation Error และ Runtime Error ก่อนดำเนินการต่อ
+10. ต้องไม่ละเลยข้อจำกัด RAM, PSRAM และ CPU
+11. ต้องไม่เขียนโค้ด Audio แบบ Blocking
+12. ต้องตรวจสอบ Resource Cleanup เมื่อวางสายทุกครั้ง
+13. ต้องเก็บ Source Code และไฟล์ Configuration ที่จำเป็นครบถ้วน
+14. ห้ามส่งมอบเฉพาะ Pseudocode
+15. ทุกการเปลี่ยนแปลงต้องรักษาความสามารถเดิมที่ทดสอบผ่านแล้ว
+
+---
+
+## 12. First Task: Project Analysis
+
+ก่อนเริ่มเขียน Firmware ให้ดำเนินการดังนี้:
+
+1. วิเคราะห์ Hardware XIAO ESP32-S3 Sense
+2. วิเคราะห์ I2S PDM RX และ I2S TX
+3. ตรวจสอบ GPIO Conflict
+4. เปรียบเทียบ SIP Stack ที่เหมาะสม
+5. ตรวจสอบความเข้ากันได้กับ ESP-IDF
+6. ประเมิน RAM, PSRAM และ CPU
+7. ออกแบบ Software Architecture
+8. จัดทำ Development Roadmap
+9. จัดทำ Pin Configuration Table
+10. จัดทำ Library Dependency List
+
+จากนั้นให้เริ่มพัฒนา Phase 1 โดยอัตโนมัติ
+
+**เป้าหมายสุดท้าย:** สร้าง XIAO ESP32-S3 Sense ให้กลายเป็น SIP IP Phone ที่สามารถ Register กับ FreePBX โทรเข้า โทรออก รับสาย วางสาย และสนทนาแบบ Full Duplex Audio ได้จริง โดยตั้งค่าทั้งหมดผ่าน Web Browser และตรวจสอบการทำงานผ่าน Serial Terminal
