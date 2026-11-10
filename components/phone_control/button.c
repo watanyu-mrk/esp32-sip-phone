@@ -104,7 +104,10 @@ esp_err_t button_init(button_callback_t callback)
     };
 
     s_running = true;
-    if (xTaskCreate(button_task, "buttons", 3072, NULL, 4, &s_task) != pdPASS) {
+    /* The callback runs on this task and calls into sip_client, which builds SDP
+     * and SIP messages in ~2 KB of locals, so 3 KB was not enough (the task hit
+     * its canary on the first ANSWER/HANGUP press). */
+    if (xTaskCreate(button_task, "buttons", 8192, NULL, 4, &s_task) != pdPASS) {
         s_running = false;
         ESP_LOGE(TAG, "[BUTTON] Failed to create task");
         return ESP_ERR_NO_MEM;
