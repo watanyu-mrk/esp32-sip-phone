@@ -1,12 +1,9 @@
 /*
- * XIAO ESP32-S3 Sense SIP IP phone - boot skeleton.
+ * XIAO ESP32-S3 Sense SIP IP phone - boot sequence.
  *
- * This phase only brings the system up and proves the module wiring:
- *   - configuration manager (NVS) is fully functional
- *   - every other module is a stub that reports ESP_ERR_NOT_SUPPORTED
- *
- * No SIP, RTP or audio path exists yet. Per the project rules, none of it is
- * faked: the stubs are explicit so nothing claims to place a call.
+ * Brings up configuration (NVS), Wi-Fi with AP fallback, the PDM/I2S audio
+ * path, the SIP UA, RTP media, the physical buttons and the web UI. Every
+ * module reports its real init result; nothing is simulated.
  */
 #include <stddef.h>
 
@@ -65,7 +62,7 @@ static void log_init_result(const char *module, esp_err_t err)
     if (err == ESP_OK) {
         ESP_LOGI(TAG, "[BOOT] %s: ready", module);
     } else if (err == ESP_ERR_NOT_SUPPORTED) {
-        ESP_LOGW(TAG, "[BOOT] %s: scaffold stub only (not implemented yet)", module);
+        ESP_LOGW(TAG, "[BOOT] %s: not available in this build", module);
     } else {
         ESP_LOGE(TAG, "[BOOT] %s: init failed (%s)", module, esp_err_to_name(err));
     }
@@ -176,6 +173,6 @@ void app_main(void)
                  (web_ip_err == ESP_OK) ? web_ip : "192.168.4.1");
     }
 
-    ESP_LOGW(TAG, "[BOOT] Skeleton build: configuration, Wi-Fi and audio capture work; telephony does not.");
+    ESP_LOGI(TAG, "[BOOT] SIP/RTP/audio/web are up; telephone ready once registered.");
     ESP_LOGI(TAG, "[BOOT] Boot sequence complete, idling.");
 }

@@ -23,5 +23,10 @@ CONFIG_LOG_DEFAULT_LEVEL_INFO=y
 # First-boot Wi-Fi credentials (menuconfig -> "XIAO SIP Phone"). Written to NVS
 # only when no configuration exists; stored in NVS in plain text.
 # TEST VALUES ONLY - remove or replace before sharing or shipping this repo.
-CONFIG_SIP_PHONE_WIFI_SSID="spd_wifi"
-CONFIG_SIP_PHONE_WIFI_PASSWORD="sphhospital"
+CONFIG_SIP_PHONE_WIFI_SSID=""
+CONFIG_SIP_PHONE_WIFI_PASSWORD=""
+
+# esp_sip_service/esp_rtc recommendations
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=10240
+CONFIG_LWIP_MAX_UDP_PCBS=64
+CONFIG_LWIP_UDP_RECVMBOX_SIZE=64

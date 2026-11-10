@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>XIAO SIP Phone</title>
-  <link rel="stylesheet" href="/style.css" />
+  <link rel="stylesheet" href="/style.css?v=0.2.3" />
 </head>
 <body>
   <header>
@@ -16,6 +16,7 @@
       <button type="button" class="tab active" data-tab="dashboard">Dashboard</button>
       <button type="button" class="tab" data-tab="wifi">Wi-Fi</button>
       <button type="button" class="tab" data-tab="sip">SIP</button>
+      <button type="button" class="tab" data-tab="phone">Phone</button>
       <button type="button" class="tab" data-tab="audio">Audio</button>
       <button type="button" class="tab" data-tab="system">System</button>
     </nav>
@@ -48,11 +49,11 @@
             <dt>Uptime</dt><dd id="st-uptime">&mdash;</dd>
             <dt>Free heap</dt><dd id="st-heap">&mdash;</dd>
             <dt>Free PSRAM</dt><dd id="st-psram">&mdash;</dd>
-            <dt>Firmware</dt><dd>0.1.0-scaffold</dd>
+            <dt>Firmware</dt><dd id="st-firmware">&mdash;</dd>
           </dl>
         </article>
       </div>
-      <p class="note">The SIP/RTP stack is not implemented yet, so SIP state stays unregistered and calls cannot be placed.</p>
+      <p class="note">The ANSWER button dials the speed-dial number on the Phone tab when idle; use that tab to change it or to place a test call.</p>
     </section>
 
     <section class="panel" data-panel="wifi">
@@ -109,7 +110,44 @@
           <label class="check"><input id="sip_prefer_pcma" type="checkbox" /> Prefer PCMA over PCMU</label>
           <button type="submit">Save SIP</button>
         </form>
-        <p class="note">Settings are persisted to NVS, but no SIP stack is linked yet. Registration and calls remain unavailable.</p>
+        <p class="note">Settings are persisted to NVS. Reboot the phone after changing the server, account or transport so the SIP UA re-registers with the new values.</p>
+      </article>
+    </section>
+
+    <section class="panel" data-panel="phone">
+      <article class="card">
+        <h2>Phone &amp; speed dial</h2>
+        <form id="phone-form">
+          <label>Speed-dial number <input id="phone_default_number" autocomplete="off" placeholder="e.g. 901" /></label>
+          <p class="note">When idle, pressing ANSWER (GPIO3) dials this number. Leave it empty to disable speed dial.</p>
+          <div class="row">
+            <label>Display name <input id="phone_display_name" autocomplete="off" /></label>
+            <label>DTMF mode
+              <select id="phone_dtmf">
+                <option value="rfc2833">RFC 2833/4733</option>
+                <option value="info">SIP INFO</option>
+                <option value="inband">In-band</option>
+              </select>
+            </label>
+          </div>
+          <label class="check"><input id="phone_auto_answer" type="checkbox" /> Auto-answer incoming calls</label>
+          <div class="row">
+            <label>Auto-answer delay (ms) <input id="phone_auto_delay" type="number" min="0" max="10000" /></label>
+            <label>Ring duration (s) <input id="phone_ring_s" type="number" min="5" max="120" /></label>
+          </div>
+          <label>Call timeout (s, 0 = off) <input id="phone_timeout_s" type="number" min="0" max="3600" /></label>
+          <button type="submit">Save phone settings</button>
+        </form>
+      </article>
+      <article class="card">
+        <h2>Call control</h2>
+        <label>Number <input id="call_number" autocomplete="off" placeholder="e.g. 901" /></label>
+        <div class="actions">
+          <button type="button" id="call-dial">Call</button>
+          <button type="button" id="call-answer">Answer</button>
+          <button type="button" id="call-hangup" class="danger">Hang up</button>
+        </div>
+        <p class="note">These buttons use the same SIP UA as the physical buttons, so a call can be tested without the keypad.</p>
       </article>
     </section>
 
@@ -159,6 +197,24 @@
   </main>
 
   <div id="toast" class="toast"></div>
-  <script src="/app.js"></script>
+  <div id="boot-error" class="toast error" style="display:none">UI script did not start. Hard-refresh the page (Ctrl+F5).</div>
+  <script>
+    window.addEventListener("error", function (event) {
+      var el = document.getElementById("boot-error");
+      if (el) {
+        el.textContent = "UI error: " + (event.message || "script failed to load");
+        el.style.display = "block";
+      }
+    });
+  </script>
+  <script src="/app.js?v=0.2.3"></script>
+  <script>
+    setTimeout(function () {
+      if (!window.__appReady) {
+        var el = document.getElementById("boot-error");
+        if (el) el.style.display = "block";
+      }
+    }, 3000);
+  </script>
 </body>
 </html>

@@ -61,6 +61,7 @@ async function refreshStatus() {
     setText("st-uptime", formatUptime(s.uptime_s));
     setText("st-heap", formatKB(s.heap_free));
     setText("st-psram", formatKB(s.psram_free));
+    setText("st-firmware", s.firmware || "—");
   } catch (err) {
     setText("st-wifi", `error: ${err.message}`);
   }
@@ -105,6 +106,16 @@ async function loadConfig() {
   setValue("audio_jitter", c.audio.jitter_frames);
   setChecked("audio_nr", c.audio.noise_reduction);
   setChecked("audio_aec", c.audio.aec_enabled);
+
+  if (c.phone) {
+    setValue("phone_default_number", c.phone.default_number);
+    setValue("phone_display_name", c.phone.display_name);
+    setValue("phone_dtmf", c.phone.dtmf_mode);
+    setChecked("phone_auto_answer", c.phone.auto_answer);
+    setValue("phone_auto_delay", c.phone.auto_answer_delay_ms);
+    setValue("phone_ring_s", c.phone.ring_duration_s);
+    setValue("phone_timeout_s", c.phone.call_timeout_s);
+  }
 
   setValue("sys_device_name", c.system.device_name);
   setValue("sys_hostname", c.system.hostname);
@@ -169,6 +180,16 @@ function wireForms() {
     aec_enabled: $("audio_aec").checked,
   }), "Audio settings saved");
 
+  submitForm("phone-form", "/api/config/phone", () => ({
+    default_number: $("phone_default_number").value.trim(),
+    display_name: $("phone_display_name").value.trim(),
+    dtmf_mode: $("phone_dtmf").value,
+    auto_answer: $("phone_auto_answer").checked,
+    auto_answer_delay_ms: Number($("phone_auto_delay").value),
+    ring_duration_s: Number($("phone_ring_s").value),
+    call_timeout_s: Number($("phone_timeout_s").value),
+  }), "Phone settings saved");
+
   submitForm("system-form", "/api/config/admin", () => ({
     device_name: $("sys_device_name").value.trim(),
     hostname: $("sys_hostname").value.trim(),
@@ -188,7 +209,30 @@ function wireTabs() {
   });
 }
 
+async function callAction(action) {
+  const body = { action };
+  if (action === "dial") {
+    const number = $("call_number").value.trim();
+    if (!number) {
+      toast("Enter a number to dial", true);
+      return;
+    }
+    body.number = number;
+  }
+  try {
+    const result = await api("/api/call", { method: "POST", body: JSON.stringify(body) });
+    toast(result.message || action);
+    await refreshStatus();
+  } catch (err) {
+    toast(err.message, true);
+  }
+}
+
 function wireActions() {
+  $("call-dial").addEventListener("click", () => callAction("dial"));
+  $("call-answer").addEventListener("click", () => callAction("answer"));
+  $("call-hangup").addEventListener("click", () => callAction("hangup"));
+
   $("reboot-btn").addEventListener("click", async () => {
     try {
       const result = await api("/api/system", {
@@ -229,4 +273,5 @@ document.addEventListener("DOMContentLoaded", async () => {
   }
 
   setInterval(refreshStatus, 3000);
+  window.__appReady = true;
 });

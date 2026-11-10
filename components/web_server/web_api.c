@@ -1,5 +1,6 @@
 #include "web_server.h"
 
+#include <ctype.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -22,7 +23,7 @@
 static const char *TAG = "WEB";
 
 /* Keep in sync with APP_FIRMWARE_VERSION in main/app_config.h. */
-#define WEB_FIRMWARE_VERSION "0.1.0-scaffold"
+#define WEB_FIRMWARE_VERSION "0.2.3"
 
 #define WEB_BODY_MAX   1024
 #define WEB_AUTH_MAX   160
@@ -273,6 +274,18 @@ static esp_err_t api_config_get(httpd_req_t *req)
     cJSON_AddBoolToObject(audio, "noise_reduction", cfg->audio.noise_reduction);
     cJSON_AddBoolToObject(audio, "aec_enabled", cfg->audio.aec_enabled);
 
+    cJSON *phone = cJSON_AddObjectToObject(root, "phone");
+    cJSON_AddStringToObject(phone, "default_number", cfg->phone.default_number);
+    cJSON_AddStringToObject(phone, "display_name", cfg->phone.display_name);
+    cJSON_AddBoolToObject(phone, "auto_answer", cfg->phone.auto_answer);
+    cJSON_AddNumberToObject(phone, "auto_answer_delay_ms", cfg->phone.auto_answer_delay_ms);
+    cJSON_AddNumberToObject(phone, "ring_duration_s", cfg->phone.ring_duration_s);
+    cJSON_AddNumberToObject(phone, "call_timeout_s", cfg->phone.call_timeout_s);
+    cJSON_AddStringToObject(phone, "dtmf_mode",
+                            (cfg->sip.dtmf_mode == DTMF_MODE_SIP_INFO)    ? "info"
+                            : (cfg->sip.dtmf_mode == DTMF_MODE_INBAND)    ? "inband"
+                                                                          : "rfc2833");
+
     cJSON *system = cJSON_AddObjectToObject(root, "system");
     cJSON_AddStringToObject(system, "device_name", cfg->system.device_name);
     cJSON_AddStringToObject(system, "hostname", cfg->system.hostname);
@@ -418,7 +431,7 @@ static esp_err_t api_config_sip_post(httpd_req_t *req)
 
     ESP_LOGI(TAG, "[WEB] SIP configuration updated (server '%s', extension '%s')",
              cfg.sip.server, cfg.sip.extension);
-    return json_ok(req, "SIP settings saved (SIP stack not implemented yet)");
+    return json_ok(req, "SIP settings saved; reboot to apply");
 }
 
 static esp_err_t api_config_admin_post(httpd_req_t *req)
@@ -475,6 +488,84 @@ static esp_err_t api_config_admin_post(httpd_req_t *req)
     return json_ok(req, "Device settings saved. New credentials apply to the next request.");
 }
 
+static bool speed_dial_number_valid(const char *number)
+{
+    if (number == NULL) {
+        return false;
+    }
+    for (const char *p = number; *p != '\0'; p++) {
+        if (!isdigit((unsigned char)*p) && *p != '*' && *p != '#' && *p != '+') {
+            return false;
+        }
+    }
+    return true;
+}
+
+static esp_err_t api_config_phone_post(httpd_req_t *req)
+{
+    if (!web_auth_check(req)) {
+        return ESP_OK;
+    }
+
+    char body[WEB_BODY_MAX + 1];
+    cJSON *root = NULL;
+    if (!read_json_body(req, body, sizeof(body), &root)) {
+        return json_error(req, "400 Bad Request", "invalid JSON body");
+    }
+
+    phone_config_t cfg = *config_manager_get();
+
+    char number[CFG_EXT_LEN];
+    snprintf(number, sizeof(number), "%s", cfg.phone.default_number);
+    copy_json_string(root, "default_number", number, sizeof(number));
+
+    /* Allow spaces around the number, reject anything that is not dialable. */
+    char clean[CFG_EXT_LEN];
+    size_t out = 0;
+    for (const char *p = number; *p != '\0' && out + 1 < sizeof(clean); p++) {
+        if (*p != ' ') {
+            clean[out++] = *p;
+        }
+    }
+    clean[out] = '\0';
+    if (clean[0] != '\0' && !speed_dial_number_valid(clean)) {
+        cJSON_Delete(root);
+        return json_error(req, "400 Bad Request",
+                          "speed-dial number may only contain digits, *, # and +");
+    }
+    snprintf(cfg.phone.default_number, sizeof(cfg.phone.default_number), "%s", clean);
+
+    copy_json_string(root, "display_name", cfg.phone.display_name, sizeof(cfg.phone.display_name));
+    cfg.phone.auto_answer = json_bool(root, "auto_answer", cfg.phone.auto_answer);
+    cfg.phone.auto_answer_delay_ms = (uint16_t)clamp_int(
+        json_int(root, "auto_answer_delay_ms", cfg.phone.auto_answer_delay_ms), 0, 10000);
+    cfg.phone.ring_duration_s = (uint16_t)clamp_int(
+        json_int(root, "ring_duration_s", cfg.phone.ring_duration_s), 5, 120);
+    cfg.phone.call_timeout_s = (uint16_t)clamp_int(
+        json_int(root, "call_timeout_s", cfg.phone.call_timeout_s), 0, 3600);
+
+    cJSON *dtmf = cJSON_GetObjectItemCaseSensitive(root, "dtmf_mode");
+    if (cJSON_IsString(dtmf) && dtmf->valuestring != NULL) {
+        if (strcmp(dtmf->valuestring, "info") == 0) {
+            cfg.sip.dtmf_mode = DTMF_MODE_SIP_INFO;
+        } else if (strcmp(dtmf->valuestring, "inband") == 0) {
+            cfg.sip.dtmf_mode = DTMF_MODE_INBAND;
+        } else {
+            cfg.sip.dtmf_mode = DTMF_MODE_RFC2833;
+        }
+    }
+    cJSON_Delete(root);
+
+    esp_err_t err = config_manager_set(&cfg);
+    if (err != ESP_OK) {
+        return json_error(req, "500 Internal Server Error", "failed to save configuration");
+    }
+
+    ESP_LOGI(TAG, "[WEB] Phone settings updated (speed dial '%s', auto answer %d)",
+             cfg.phone.default_number, (int)cfg.phone.auto_answer);
+    return json_ok(req, "Phone settings saved");
+}
+
 static esp_err_t api_system_post(httpd_req_t *req)
 {
     if (!web_auth_check(req)) {
@@ -518,6 +609,55 @@ static esp_err_t api_system_post(httpd_req_t *req)
     return ESP_OK;
 }
 
+static esp_err_t api_call_post(httpd_req_t *req)
+{
+    if (!web_auth_check(req)) {
+        return ESP_OK;
+    }
+
+    char body[WEB_BODY_MAX + 1];
+    cJSON *root = NULL;
+    if (!read_json_body(req, body, sizeof(body), &root)) {
+        return json_error(req, "400 Bad Request", "invalid JSON body");
+    }
+
+    cJSON *action = cJSON_GetObjectItemCaseSensitive(root, "action");
+    if (!cJSON_IsString(action) || action->valuestring == NULL) {
+        cJSON_Delete(root);
+        return json_error(req, "400 Bad Request", "action is required");
+    }
+
+    char act[16];
+    snprintf(act, sizeof(act), "%s", action->valuestring);
+    char number[CFG_EXT_LEN] = {0};
+    copy_json_string(root, "number", number, sizeof(number));
+    cJSON_Delete(root);
+
+    esp_err_t err;
+    if (strcmp(act, "dial") == 0) {
+        if (number[0] == '\0') {
+            /* No number given: use the speed-dial number from the Phone tab. */
+            const phone_config_t *cfg = config_manager_get();
+            snprintf(number, sizeof(number), "%s", cfg->phone.default_number);
+        }
+        if (number[0] == '\0') {
+            return json_error(req, "400 Bad Request", "number is required to dial");
+        }
+        err = sip_client_dial(number);
+    } else if (strcmp(act, "answer") == 0) {
+        err = sip_client_answer();
+    } else if (strcmp(act, "hangup") == 0 || strcmp(act, "reject") == 0) {
+        err = sip_client_hangup();
+    } else {
+        return json_error(req, "400 Bad Request", "unknown action");
+    }
+
+    if (err != ESP_OK) {
+        return json_error(req, "409 Conflict", esp_err_to_name(err));
+    }
+    return json_ok(req, act);
+}
+
 esp_err_t web_api_init(httpd_handle_t server)
 {
     static const httpd_uri_t routes[] = {
@@ -527,7 +667,9 @@ esp_err_t web_api_init(httpd_handle_t server)
         { .uri = "/api/config/audio", .method = HTTP_POST, .handler = api_config_audio_post, .user_ctx = NULL },
         { .uri = "/api/config/sip", .method = HTTP_POST, .handler = api_config_sip_post, .user_ctx = NULL },
         { .uri = "/api/config/admin", .method = HTTP_POST, .handler = api_config_admin_post, .user_ctx = NULL },
+        { .uri = "/api/config/phone", .method = HTTP_POST, .handler = api_config_phone_post, .user_ctx = NULL },
         { .uri = "/api/system", .method = HTTP_POST, .handler = api_system_post, .user_ctx = NULL },
+        { .uri = "/api/call", .method = HTTP_POST, .handler = api_call_post, .user_ctx = NULL },
     };
 
     for (size_t i = 0; i < sizeof(routes) / sizeof(routes[0]); i++) {

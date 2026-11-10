@@ -28,6 +28,10 @@ typedef struct {
 
 esp_err_t rtp_client_init(void);
 
+/* Binds the local RTP port from RTP_LOCAL_PORT_MIN..MAX and reports it so the
+ * SIP layer can put the same port in the SDP offer/answer. Idempotent. */
+esp_err_t rtp_client_open(uint16_t *local_port);
+
 /*
  * payload_type: RTP_PAYLOAD_TYPE_PCMU (0) or RTP_PAYLOAD_TYPE_PCMA (8).
  * Local port is chosen from RTP_LOCAL_PORT_MIN..MAX.

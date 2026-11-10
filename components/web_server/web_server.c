@@ -19,32 +19,38 @@ extern const uint8_t style_css_end[] asm("_binary_style_css_end");
 extern const uint8_t app_js_start[] asm("_binary_app_js_start");
 extern const uint8_t app_js_end[] asm("_binary_app_js_end");
 
+/* Static assets hold no secrets and are served without auth so the UI still
+ * boots when a browser does not replay Basic credentials for subresources.
+ * The HTML shell and every /api route stay protected. */
 static esp_err_t send_asset(httpd_req_t *req, const uint8_t *start, const uint8_t *end,
                             const char *content_type, const char *cache_control)
 {
-    if (!web_auth_check(req)) {
-        return ESP_OK;
-    }
+    /* EMBED_TXTFILES appends a NUL terminator that _end points past; sending it
+     * makes browsers reject app.js with a parse error. Send only the text. */
+    size_t len = strnlen((const char *)start, (size_t)(end - start));
 
     httpd_resp_set_type(req, content_type);
     httpd_resp_set_hdr(req, "Cache-Control", cache_control);
-    return httpd_resp_send(req, (const char *)start, (ssize_t)(end - start));
+    return httpd_resp_send(req, (const char *)start, (ssize_t)len);
 }
 
 static esp_err_t index_get_handler(httpd_req_t *req)
 {
+    if (!web_auth_check(req)) {
+        return ESP_OK;
+    }
     return send_asset(req, index_html_start, index_html_end, "text/html; charset=utf-8",
                       "no-store");
 }
 
 static esp_err_t css_get_handler(httpd_req_t *req)
 {
-    return send_asset(req, style_css_start, style_css_end, "text/css", "max-age=3600");
+    return send_asset(req, style_css_start, style_css_end, "text/css", "no-store");
 }
 
 static esp_err_t js_get_handler(httpd_req_t *req)
 {
-    return send_asset(req, app_js_start, app_js_end, "application/javascript", "max-age=3600");
+    return send_asset(req, app_js_start, app_js_end, "application/javascript", "no-store");
 }
 
 esp_err_t web_server_start(void)

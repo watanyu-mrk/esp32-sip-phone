@@ -14,7 +14,7 @@
 
 #define APP_NAME             "ESP32-S3 SIP IP Phone"
 #define APP_BOARD            "XIAO ESP32-S3 Sense"
-#define APP_FIRMWARE_VERSION "0.1.0-scaffold"
+#define APP_FIRMWARE_VERSION "0.2.3"
 
 /* Shared application state */
 #define APP_REMOTE_NUMBER_LEN 32

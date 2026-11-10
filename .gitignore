@@ -9,3 +9,7 @@ dependencies.lock
 .vscode/
 .idea/
 .DS_Store
+
+# local debug logs
+.answer_watch.log
+*.log
