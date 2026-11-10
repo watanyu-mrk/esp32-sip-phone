@@ -4,6 +4,8 @@
 
 **Status: working SIP phone on hardware (2026-11-10).** The ESP-IDF project boots on a XIAO ESP32-S3 Sense (COM8): 8 MB octal PSRAM, NVS configuration, Wi-Fi (`<your-ssid>`), a live PDM mic meter (~-44 dBFS ambient), the embedded web UI on port 80, and a working SIP UA. `components/sip_client` registers against a Yeastar UC120 at `192.168.5.142:5060` as extension `901` (digest with `qop=auth` or the legacy form), answers incoming INVITEs, and `rtp_audio` bridges G.711 PCMU to the I2S speaker and PDM mic using real UDP RTP (20 ms frames, 10-frame jitter buffer, send/receive counters). A call from a PC UAC verified `100/180/200 OK`, SDP, ACK, 241 RTP packets in 5 s, BYE, and board counters `sent 80, recv 75, lost 0`. Outgoing INVITEs are digest-authenticated and accepted by the UC120, and an outbound call was verified end-to-end with a PC UAC registered as second extension `902`: the board dialled the speed-dial number, the PC answered, and RTP flowed both ways (board `sent 188, recv 195`; PC `tx 615, rx 586`). Dialling `901` itself reaches PBX voicemail (`183`). The Phone tab speed-dial number is dialled by the ANSWER button via `phone.default_number`. The pre-compiled `esp_sip_service`/`esp_rtc` stack was removed because it re-read a stale 262-byte response forever after the first REGISTER, never sent the authenticated retry and tripped the task watchdog. The lab SSID is served by APs on both `192.168.5.x` and `192.168.7.x`; the phone roams, so SIP re-registers when its address changes (checked every 2 s).
 
+The hardware buttons work end-to-end: ANSWER (GPIO3) answers a ringing call or dials `phone.default_number` when idle, HANGUP (GPIO2) ends or cancels. They first crashed the board with `***ERROR*** A stack overflow in task buttons has been detected.`, because the callback ran on a 3 KB `buttons` task while `sip_client_dial/answer/hangup` build SDP and SIP messages in ~2 KB of locals; the task stack is now 8 KB and three real presses (dial-out with `180 Ringing` → `200 OK` → RTP `sent 129, recv 79, lost 0` → BYE, answer an incoming INVITE → RTP `sent 171, recv 118, lost 0` → BYE, and another dial-out) completed without a panic or reboot. Fix committed as `d6f2ac5`.
+
 The requirements document is `promp.txt` (Thai): the authoritative brief for an **ESP32-S3 SIP IP phone** on a **Seeed Studio XIAO ESP32-S3 Sense**, built with **ESP-IDF in C/C++**. It must work as a real phone against FreePBX/Asterisk: SIP REGISTER, incoming/outgoing calls, RTP two-way audio, all configured through an on-device web UI.
 
 Treat `promp.txt` as the requirements document — read it before implementing anything. The agent role defined there is a Senior Embedded Systems Engineer; working rules that matter most:
@@ -94,7 +96,29 @@ runpy.run_path(r'C:\esp\esp-idf\tools\idf.py', run_name='__main__')
 PY
 ```
 
-A normal Windows CMD/PowerShell terminal does not have this problem.
+A normal Windows CMD/PowerShell terminal does not have this problem. If even the in-process `MSYSTEM` pop does not work (observed 2026-11-10: `idf.py` printed the warning and exited 0 without building, so check the log line count before believing it), skip `idf.py` entirely — the CMake cache already exists:
+
+```bash
+export IDF_PATH=/c/esp/esp-idf
+export PATH="/c/Users/Mrk/.espressif/python_env/idf5.5_py3.14_env/Scripts:/c/Users/Mrk/.espressif/tools/cmake/3.30.2/bin:/c/Users/Mrk/.espressif/tools/ninja/1.12.1:/c/Users/Mrk/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20260121/xtensa-esp-elf/bin:$PATH"
+ninja -C build                                  # builds build/esp32_sip_phone.bin
+cd build && python -m esptool --chip esp32s3 -p COM8 -b 460800 \
+  --before default_reset --after hard_reset write_flash @flash_args
+```
+
+`flash_args` paths are relative to `build/`, so run esptool from there.
+
+## Current status (2026-11-10)
+
+| Item | State |
+| --- | --- |
+| HEAD | `d6f2ac5` "Give the button task enough stack for SIP message building" |
+| Remote | `origin` https://github.com/watanyu-mrk/esp32-sip-phone (private) — push of `d6f2ac5` still pending, needs a PAT |
+| Firmware on the board | 0.2.3 with the 8 KB `buttons` task, flashed to COM8 and registered (`REGISTERED, expires 300s`) |
+| Verified on hardware | REGISTER with digest; incoming and outgoing calls; two-way G.711 (PCMU and PCMA); ANSWER dial-out, ANSWER on ring, remote BYE / local teardown; no stack overflow on any button press |
+| Not verified yet | HANGUP while an outgoing INVITE is still pending (the path that crashed before the stack fix); DTMF; TCP/TLS |
+| Environment notes | `idf.py` is unusable from this Git Bash (MSys check) — use `ninja -C build`; the board currently gets `192.168.7.201`, which this PC cannot reach, so testing is serial-only; serial watcher pattern writes `.answer_watch.log` (gitignored) |
+| Credentials | extension `901`/`901` against UC120 `192.168.5.142:5060`, web admin `admin`/`admin`; lab Wi-Fi is kept out of git |
 
 ## Conventions and constraints
 
