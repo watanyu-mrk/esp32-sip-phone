@@ -17,6 +17,7 @@
 #include "phone_control.h"
 #include "sip_client.h"
 #include "ui.h"
+#include "ui_settings.h"
 #include "wifi_manager.h"
 
 static const char *TAG = "UI";
@@ -150,6 +151,12 @@ static void delete_long_cb(lv_event_t *event)
     s_number[0] = '\0';
     s_notice_until = 0;
     render_number();
+}
+
+static void menu_cb(lv_event_t *event)
+{
+    (void)event;
+    ui_settings_open();
 }
 
 static void call_cb(lv_event_t *event)
@@ -305,13 +312,16 @@ esp_err_t ui_init(void)
         }
     }
 
-    /* Call actions under the keypad. */
-    lv_obj_t *del_btn = make_button(screen, CARD_X, ACTION_Y, ACTION_W, ACTION_H, "DELETE",
-                                    COL_RED, 0xB03A2E, COL_TEXT, &lv_font_montserrat_20,
-                                    delete_cb, NULL);
+    /* Actions under the keypad: delete, call and the settings menu. */
+    lv_obj_t *del_btn = make_button(screen, 8, ACTION_Y, 72, ACTION_H, "DELETE", COL_RED,
+                                    0xB03A2E, COL_TEXT, &lv_font_montserrat_14, delete_cb, NULL);
     lv_obj_add_event_cb(del_btn, delete_long_cb, LV_EVENT_LONG_PRESSED, NULL);
-    make_button(screen, 272 - CARD_X - ACTION_W, ACTION_Y, ACTION_W, ACTION_H, "CALL",
-                COL_GREEN, 0x1E8449, COL_TEXT, &lv_font_montserrat_20, call_cb, NULL);
+    make_button(screen, 88, ACTION_Y, 104, ACTION_H, "CALL", COL_GREEN, 0x1E8449, COL_TEXT,
+                &lv_font_montserrat_20, call_cb, NULL);
+    make_button(screen, 200, ACTION_Y, 64, ACTION_H, "MENU", COL_CARD_HI, COL_PRIMARY, COL_TEXT,
+                &lv_font_montserrat_14, menu_cb, NULL);
+
+    ui_settings_create(screen);
 
     lv_timer_create(ui_tick_cb, 500, NULL);
 
