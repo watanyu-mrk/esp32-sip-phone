@@ -4,7 +4,10 @@
  * Register map used here:
  *   0x8140  product ID ("911")
  *   0x814E  buffer status: bit7 = ready, low nibble = touch count
- *   0x8150  first touch point: id, x lo/hi, y lo/hi, size lo/hi
+ *   0x814F  first touch record: track id, x lo/hi, y lo/hi, size lo/hi
+ *
+ * The record starts at 0x814F, not 0x8150: reading one byte late shifts
+ * every field and produces impossible coordinates on a real board.
  * Reading 0x814E and then writing 0 to it releases the controller buffer.
  */
 #include <string.h>
@@ -21,8 +24,9 @@
 static const char *TAG = "TOUCH";
 
 #define GT911_REG_PRODUCT_ID 0x8140
+#define GT911_REG_RESOLUTION 0x8146
 #define GT911_REG_STATUS     0x814E
-#define GT911_REG_POINT1     0x8150
+#define GT911_REG_POINT1     0x814F
 
 static i2c_master_bus_handle_t s_bus;
 static i2c_master_dev_handle_t s_dev;
@@ -135,6 +139,15 @@ esp_err_t touch_driver_init(void)
 
     gt911_int_to_input();
     s_ready = true;
+
+    /* The native resolution decides whether the reported frame is 480x272 or
+     * 272x480, which is what the SWAP_XY macro above has to match. */
+    uint8_t res[4] = {0};
+    if (gt911_read(GT911_REG_RESOLUTION, res, sizeof(res)) == ESP_OK) {
+        ESP_LOGI(TAG, "Native resolution: %ux%u", (unsigned)(res[0] | (res[1] << 8)),
+                 (unsigned)(res[2] | (res[3] << 8)));
+    }
+
     ESP_LOGI(TAG, "Touch Ready");
     return ESP_OK;
 }
