@@ -15,6 +15,7 @@
 #pragma once
 
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
 
 #include "esp_err.h"
@@ -45,3 +46,7 @@ esp_err_t sip_client_hangup(void);
 
 sip_reg_state_t sip_client_get_reg_state(void);
 sip_call_state_t sip_client_get_call_state(void);
+
+/* Remote party of the current call (the caller for an incoming INVITE, empty
+ * when idle). Callers copy it out, so it is safe from any task. */
+void sip_client_get_peer(char *buf, size_t len);

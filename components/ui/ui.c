@@ -54,6 +54,11 @@ static lv_obj_t *s_ext_label;
 static lv_obj_t *s_wifi_label;
 static lv_obj_t *s_sip_label;
 static lv_obj_t *s_number_label;
+static lv_obj_t *s_delete_btn;
+static lv_obj_t *s_call_btn;
+static lv_obj_t *s_answer_btn;
+static lv_obj_t *s_reject_btn;
+static lv_obj_t *s_hangup_btn;
 
 static char s_number[DIAL_MAX_LEN + 1];
 static char s_notice[48];
@@ -179,6 +184,50 @@ static void call_cb(lv_event_t *event)
     }
 }
 
+static void set_shown(lv_obj_t *obj, bool shown)
+{
+    if (obj == NULL) {
+        return;
+    }
+    if (shown) {
+        lv_obj_clear_flag(obj, LV_OBJ_FLAG_HIDDEN);
+    } else {
+        lv_obj_add_flag(obj, LV_OBJ_FLAG_HIDDEN);
+    }
+}
+
+/* Incoming call: accept it, or decline it with a reason the PBX understands. */
+static void answer_cb(lv_event_t *event)
+{
+    (void)event;
+    esp_err_t err = phone_control_answer();
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Answer failed: %s", esp_err_to_name(err));
+        show_notice("Answer failed", COL_RED);
+    }
+}
+
+static void reject_cb(lv_event_t *event)
+{
+    (void)event;
+    esp_err_t err = phone_control_reject();
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Reject failed: %s", esp_err_to_name(err));
+        show_notice("Reject failed", COL_RED);
+    }
+}
+
+/* Cancels a dialling/ringing call and ends an established one. */
+static void hangup_cb(lv_event_t *event)
+{
+    (void)event;
+    esp_err_t err = phone_control_hangup();
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Hangup failed: %s", esp_err_to_name(err));
+        show_notice("Hangup failed", COL_RED);
+    }
+}
+
 static const char *call_state_text(sip_call_state_t state)
 {
     switch (state) {
@@ -218,10 +267,29 @@ static void ui_tick_cb(lv_timer_t *timer)
         lv_obj_set_style_text_color(s_sip_label, lv_color_hex(COL_WARN), 0);
     }
 
+    /* The action row follows the call state: dial controls when idle, answer
+     * and reject while an INVITE rings, hangup once a call is up or pending. */
     sip_call_state_t call_state = sip_client_get_call_state();
+    bool incoming = (call_state == SIP_CALL_RINGING_INCOMING);
+    bool busy = (call_state != SIP_CALL_IDLE) && !incoming;
+
+    set_shown(s_delete_btn, !incoming && !busy);
+    set_shown(s_call_btn, !incoming && !busy);
+    set_shown(s_answer_btn, incoming);
+    set_shown(s_reject_btn, incoming);
+    set_shown(s_hangup_btn, busy);
+
     if (call_state != SIP_CALL_IDLE) {
+        /* For an incoming call the interesting number is the caller's, not
+         * whatever was left in the dial buffer. */
+        char peer[48];
+        const char *who = s_number;
+        if (incoming) {
+            sip_client_get_peer(peer, sizeof(peer));
+            who = (peer[0] != '\0') ? peer : "unknown";
+        }
         lv_obj_set_style_text_color(s_number_label, lv_color_hex(COL_TEXT), 0);
-        lv_label_set_text_fmt(s_number_label, "%s  %s", call_state_text(call_state), s_number);
+        lv_label_set_text_fmt(s_number_label, "%s  %s", call_state_text(call_state), who);
         return;
     }
     render_number();
@@ -312,14 +380,26 @@ esp_err_t ui_init(void)
         }
     }
 
-    /* Actions under the keypad: delete, call and the settings menu. */
-    lv_obj_t *del_btn = make_button(screen, 8, ACTION_Y, 72, ACTION_H, "DELETE", COL_RED,
-                                    0xB03A2E, COL_TEXT, &lv_font_montserrat_14, delete_cb, NULL);
-    lv_obj_add_event_cb(del_btn, delete_long_cb, LV_EVENT_LONG_PRESSED, NULL);
-    make_button(screen, 88, ACTION_Y, 104, ACTION_H, "CALL", COL_GREEN, 0x1E8449, COL_TEXT,
-                &lv_font_montserrat_20, call_cb, NULL);
+    /* Actions under the keypad. MENU stays put; the rest swap places with the
+     * call controls as the call state changes. */
+    s_delete_btn = make_button(screen, 8, ACTION_Y, 72, ACTION_H, "DELETE", COL_RED,
+                               0xB03A2E, COL_TEXT, &lv_font_montserrat_14, delete_cb, NULL);
+    lv_obj_add_event_cb(s_delete_btn, delete_long_cb, LV_EVENT_LONG_PRESSED, NULL);
+    s_call_btn = make_button(screen, 88, ACTION_Y, 104, ACTION_H, "CALL", COL_GREEN,
+                             0x1E8449, COL_TEXT, &lv_font_montserrat_20, call_cb, NULL);
+    s_answer_btn = make_button(screen, 8, ACTION_Y, 92, ACTION_H, "ANSWER", COL_GREEN,
+                               0x1E8449, COL_TEXT, &lv_font_montserrat_16, answer_cb, NULL);
+    s_reject_btn = make_button(screen, 108, ACTION_Y, 84, ACTION_H, "REJECT", COL_RED,
+                               0xB03A2E, COL_TEXT, &lv_font_montserrat_16, reject_cb, NULL);
+    s_hangup_btn = make_button(screen, 8, ACTION_Y, 184, ACTION_H, "HANGUP", COL_RED,
+                               0xB03A2E, COL_TEXT, &lv_font_montserrat_20, hangup_cb, NULL);
     make_button(screen, 200, ACTION_Y, 64, ACTION_H, "MENU", COL_CARD_HI, COL_PRIMARY, COL_TEXT,
                 &lv_font_montserrat_14, menu_cb, NULL);
+
+    /* Only the dial controls are shown until the first tick picks the row. */
+    set_shown(s_answer_btn, false);
+    set_shown(s_reject_btn, false);
+    set_shown(s_hangup_btn, false);
 
     ui_settings_create(screen);
 

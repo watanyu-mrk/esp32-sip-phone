@@ -1594,3 +1594,11 @@ sip_call_state_t sip_client_get_call_state(void)
 {
     return s_call;
 }
+
+void sip_client_get_peer(char *buf, size_t len)
+{
+    if (buf == NULL || len == 0) {
+        return;
+    }
+    snprintf(buf, len, "%s", s_peer);
+}
