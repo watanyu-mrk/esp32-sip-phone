@@ -1,5 +1,6 @@
 /*
- * GUITION JC4827W543 display: 4.3" 480x272 IPS panel over quad SPI.
+ * GUITION JC4827W543 display: 4.3" IPS panel over quad SPI, driven in
+ * portrait (272x480) because the keypad UI is taller than it is wide.
  *
  * The panel controller is NV3041A (Guition's brief calls it ST3401A; both
  * names appear in vendor and community material for this board). The QSPI
@@ -18,8 +19,8 @@
 #include "esp_err.h"
 #include "esp_lcd_types.h"
 
-#define LCD_H_RES 480
-#define LCD_V_RES 272
+#define LCD_H_RES 272
+#define LCD_V_RES 480
 #define LCD_BITS_PER_PIXEL 16
 
 #define LCD_HOST           SPI3_HOST

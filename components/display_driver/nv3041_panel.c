@@ -178,7 +178,10 @@ esp_err_t esp_lcd_new_panel_nv3041(const esp_lcd_panel_io_handle_t io,
         ESP_GOTO_ON_ERROR(gpio_config(&io_conf), err, TAG, "configure reset GPIO failed");
     }
 
-    panel->madctl_val = 0xC0; /* MX | MY: landcape, 180 deg panel mounting */
+    /* Portrait 272x480: the native raster is 480x272, so MV is required to
+     * swap the axes. MY then keeps the image the right way up, matching the
+     * 0xC0 (MX|MY) setting that was verified upright in landscape. */
+    panel->madctl_val = 0xA0; /* MV | MY: portrait */
     if (panel_dev_config->rgb_ele_order == LCD_RGB_ELEMENT_ORDER_BGR) {
         panel->madctl_val |= LCD_CMD_BGR_BIT;
     }

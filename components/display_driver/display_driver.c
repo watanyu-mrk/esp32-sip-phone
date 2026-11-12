@@ -144,10 +144,10 @@ esp_err_t display_driver_init(void)
 
     ESP_RETURN_ON_ERROR(esp_lcd_panel_reset(s_panel), TAG, "panel reset failed");
     ESP_RETURN_ON_ERROR(esp_lcd_panel_init(s_panel), TAG, "panel init failed");
-    /* Measured on the real JC4827W543: the controller powers up non-inverted.
-     * Turning inversion on rendered the whole UI as a pale negative, so the
-     * command is sent explicitly as INVOFF to override any sticky state. */
-    ESP_RETURN_ON_ERROR(esp_lcd_panel_invert_color(s_panel, false), TAG, "invert off failed");
+    /* The panel itself is inverted; the verified ESPHome configuration for
+     * this board (guition-jc4827543c) sets invert_colors: true together with
+     * MADCTL 0xC0 and COLMOD 0x01, so the same is done here. */
+    ESP_RETURN_ON_ERROR(esp_lcd_panel_invert_color(s_panel, true), TAG, "invert failed");
     ESP_RETURN_ON_ERROR(esp_lcd_panel_disp_on_off(s_panel, true), TAG, "display on failed");
 
     ESP_LOGI(TAG, "Initialization Complete");

@@ -21,14 +21,15 @@
 #define TOUCH_I2C_ADDR_ALTERNATE 0x14
 #define TOUCH_I2C_FREQ_HZ        400000
 
-#define TOUCH_H_RES 480
-#define TOUCH_V_RES 272
+#define TOUCH_H_RES 272
+#define TOUCH_V_RES 480
 
-/* The panel is mounted 180 degrees relative to the touch controller's native
- * coordinate system. Tune these three macros if touch lands mirrored or
- * axis-swapped on a different board revision. */
-#define TOUCH_SWAP_XY 0
-#define TOUCH_MIRROR_X 1
+/* The GT911 reports in the panel's native 480x272 landscape frame. The UI and
+ * the panel MADCTL are portrait (MV|MY), so raw (x,y) becomes screen (y, 479-x).
+ * Tune these three macros if touch lands mirrored or axis-swapped on a
+ * different board revision. */
+#define TOUCH_SWAP_XY 1
+#define TOUCH_MIRROR_X 0
 #define TOUCH_MIRROR_Y 1
 
 typedef struct {

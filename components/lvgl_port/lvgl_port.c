@@ -47,6 +47,17 @@ static bool flush_done_cb(esp_lcd_panel_io_handle_t panel_io, esp_lcd_panel_io_e
     return higher_priority_task_woken == pdTRUE;
 }
 
+/* The panel takes RGB565 most-significant byte first, while LVGL buffers are
+ * little-endian, so the pixels are swapped in place before the transfer. */
+static void rgb565_to_big_endian(uint8_t *px, size_t px_count)
+{
+    for (size_t i = 0; i < px_count; i++) {
+        uint8_t tmp = px[2 * i];
+        px[2 * i] = px[2 * i + 1];
+        px[2 * i + 1] = tmp;
+    }
+}
+
 static void flush_cb(lv_display_t *display, const lv_area_t *area, uint8_t *px_map)
 {
     int x_start = area->x1;
@@ -58,6 +69,8 @@ static void flush_cb(lv_display_t *display, const lv_area_t *area, uint8_t *px_m
      * cannot succeed before this transfer has actually finished. */
     while (xSemaphoreTake(s_flush_done, 0) == pdTRUE) {
     }
+
+    rgb565_to_big_endian(px_map, (size_t)(x_end - x_start) * (size_t)(y_end - y_start));
 
     esp_err_t err = esp_lcd_panel_draw_bitmap(s_panel, x_start, y_start, x_end, y_end, px_map);
     if (err == ESP_OK) {

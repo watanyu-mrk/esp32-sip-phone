@@ -1,9 +1,10 @@
 /*
- * Home screen for the 480x272 touch panel.
+ * Portrait home screen for the 272x480 touch panel.
  *
- * Phase 2 scope: prove display, touch and LVGL with a real dialpad. The CALL
- * button hands the number to phone_control (the call orchestrator), never to
- * the SIP stack, and reports the real error when a call cannot start.
+ * Layout: status header, a framed display card for the dialled number, then a
+ * 3x4 keypad with the call actions underneath. The CALL button hands the
+ * number to phone_control (the call orchestrator), never to the SIP stack, and
+ * reports the real error when a call cannot start.
  */
 #include <stdio.h>
 #include <string.h>
@@ -33,11 +34,25 @@ static const char *TAG = "UI";
 
 #define DIAL_MAX_LEN 24
 
+/* Portrait geometry (272 wide, 480 tall). */
+#define HEADER_H     30
+#define CARD_X       8
+#define CARD_Y       36
+#define CARD_W       256
+#define CARD_H       84
+#define KEY_X0       8
+#define KEY_Y0       128
+#define KEY_W        80
+#define KEY_H        60
+#define KEY_GAP      8
+#define ACTION_Y     404
+#define ACTION_W     124
+#define ACTION_H     56
+
 static lv_obj_t *s_ext_label;
 static lv_obj_t *s_wifi_label;
 static lv_obj_t *s_sip_label;
 static lv_obj_t *s_number_label;
-static lv_obj_t *s_last_key;
 
 static char s_number[DIAL_MAX_LEN + 1];
 static char s_notice[48];
@@ -46,7 +61,6 @@ static uint32_t s_notice_until;
 static void style_button(lv_obj_t *btn, uint32_t color, uint32_t pressed_color,
                          uint32_t text_color, const lv_font_t *font)
 {
-    lv_obj_remove_style_all(btn);
     lv_obj_add_flag(btn, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_set_style_bg_color(btn, lv_color_hex(color), 0);
     lv_obj_set_style_bg_opa(btn, LV_OPA_COVER, 0);
@@ -63,6 +77,10 @@ static lv_obj_t *make_button(lv_obj_t *parent, int x, int y, int w, int h, const
                              const lv_font_t *font, lv_event_cb_t cb, void *user_data)
 {
     lv_obj_t *btn = lv_button_create(parent);
+    /* Strip the theme styles first: lv_obj_set_pos/size write into a local
+     * style, so removing styles afterwards deletes the geometry and the
+     * button collapses to zero size together with its label. */
+    lv_obj_remove_style_all(btn);
     lv_obj_set_pos(btn, x, y);
     lv_obj_set_size(btn, w, h);
     style_button(btn, color, pressed, text_color, font);
@@ -111,7 +129,6 @@ static void dial_key_cb(lv_event_t *event)
     s_notice_until = 0;
     if (len + strlen(key) < sizeof(s_number)) {
         memcpy(&s_number[len], key, strlen(key) + 1);
-        s_last_key = lv_event_get_target(event);
         render_number();
     }
 }
@@ -155,12 +172,6 @@ static void call_cb(lv_event_t *event)
     }
 }
 
-static void placeholder_cb(lv_event_t *event)
-{
-    const char *name = lv_event_get_user_data(event);
-    show_notice(name, COL_WARN);
-}
-
 static const char *call_state_text(sip_call_state_t state)
 {
     switch (state) {
@@ -180,11 +191,12 @@ static void ui_tick_cb(lv_timer_t *timer)
 
     const phone_config_t *cfg = config_manager_get();
     if (cfg) {
-        lv_label_set_text_fmt(s_ext_label, "Ext: %s", cfg->sip.extension[0] ? cfg->sip.extension : "--");
+        lv_label_set_text_fmt(s_ext_label, "Ext: %s",
+                              cfg->sip.extension[0] ? cfg->sip.extension : "--");
     }
 
     if (wifi_manager_is_connected()) {
-        lv_label_set_text_fmt(s_wifi_label, "WiFi %d dBm", wifi_manager_get_rssi());
+        lv_label_set_text_fmt(s_wifi_label, "WiFi %d", wifi_manager_get_rssi());
         lv_obj_set_style_text_color(s_wifi_label, lv_color_hex(COL_TEXT), 0);
     } else {
         lv_label_set_text(s_wifi_label, "WiFi --");
@@ -216,11 +228,11 @@ esp_err_t ui_init(void)
     lv_obj_set_style_bg_opa(screen, LV_OPA_COVER, 0);
     lv_obj_set_style_text_color(screen, lv_color_hex(COL_TEXT), 0);
 
-    /* Header */
+    /* Header: device name on the left, registration state on the right. */
     lv_obj_t *header = lv_obj_create(screen);
     lv_obj_remove_style_all(header);
     lv_obj_set_pos(header, 0, 0);
-    lv_obj_set_size(header, 480, 30);
+    lv_obj_set_size(header, 272, HEADER_H);
     lv_obj_set_style_bg_color(header, lv_color_hex(COL_HEADER), 0);
     lv_obj_set_style_bg_opa(header, LV_OPA_COVER, 0);
     lv_obj_clear_flag(header, LV_OBJ_FLAG_SCROLLABLE);
@@ -233,37 +245,51 @@ esp_err_t ui_init(void)
     lv_obj_set_style_text_font(name, &lv_font_montserrat_14, 0);
     lv_obj_set_style_text_color(name, lv_color_hex(COL_TEXT), 0);
     lv_label_set_text(name, device_name);
-    lv_obj_set_pos(name, 8, 7);
-
-    s_ext_label = lv_label_create(header);
-    lv_obj_set_style_text_font(s_ext_label, &lv_font_montserrat_14, 0);
-    lv_obj_set_style_text_color(s_ext_label, lv_color_hex(COL_DIM), 0);
-    lv_label_set_text(s_ext_label, "Ext: --");
-    lv_obj_set_pos(s_ext_label, 168, 7);
-
-    s_wifi_label = lv_label_create(header);
-    lv_obj_set_style_text_font(s_wifi_label, &lv_font_montserrat_14, 0);
-    lv_obj_set_style_text_color(s_wifi_label, lv_color_hex(COL_DIM), 0);
-    lv_label_set_text(s_wifi_label, "WiFi --");
-    lv_obj_set_pos(s_wifi_label, 272, 7);
+    lv_obj_set_pos(name, 6, 7);
 
     s_sip_label = lv_label_create(header);
     lv_obj_set_style_text_font(s_sip_label, &lv_font_montserrat_14, 0);
     lv_obj_set_style_text_color(s_sip_label, lv_color_hex(COL_WARN), 0);
+    lv_obj_set_style_text_align(s_sip_label, LV_TEXT_ALIGN_RIGHT, 0);
     lv_label_set_text(s_sip_label, "SIP OFFLINE");
-    lv_obj_set_pos(s_sip_label, 386, 7);
+    lv_obj_set_pos(s_sip_label, 154, 6);
+    lv_obj_set_size(s_sip_label, 112, 20);
 
-    /* Dialled number / call state */
-    s_number_label = lv_label_create(screen);
+    /* Display card: extension/Wi-Fi strip plus the dialled number. */
+    lv_obj_t *card = lv_obj_create(screen);
+    lv_obj_remove_style_all(card);
+    lv_obj_set_pos(card, CARD_X, CARD_Y);
+    lv_obj_set_size(card, CARD_W, CARD_H);
+    lv_obj_set_style_bg_color(card, lv_color_hex(COL_CARD), 0);
+    lv_obj_set_style_bg_opa(card, LV_OPA_COVER, 0);
+    lv_obj_set_style_radius(card, 10, 0);
+    lv_obj_set_style_border_width(card, 1, 0);
+    lv_obj_set_style_border_color(card, lv_color_hex(COL_CARD_HI), 0);
+    lv_obj_clear_flag(card, LV_OBJ_FLAG_SCROLLABLE);
+
+    s_ext_label = lv_label_create(card);
+    lv_obj_set_style_text_font(s_ext_label, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_color(s_ext_label, lv_color_hex(COL_DIM), 0);
+    lv_label_set_text(s_ext_label, "Ext: --");
+    lv_obj_set_pos(s_ext_label, 10, 6);
+
+    s_wifi_label = lv_label_create(card);
+    lv_obj_set_style_text_font(s_wifi_label, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_color(s_wifi_label, lv_color_hex(COL_DIM), 0);
+    lv_obj_set_style_text_align(s_wifi_label, LV_TEXT_ALIGN_RIGHT, 0);
+    lv_label_set_text(s_wifi_label, "WiFi --");
+    lv_obj_set_pos(s_wifi_label, 150, 6);
+    lv_obj_set_size(s_wifi_label, 96, 20);
+
+    s_number_label = lv_label_create(card);
     lv_obj_set_style_text_font(s_number_label, &lv_font_montserrat_28, 0);
     lv_obj_set_style_text_color(s_number_label, lv_color_hex(COL_DIM), 0);
     lv_obj_set_style_text_align(s_number_label, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_set_pos(s_number_label, 8, 36);
-    lv_obj_set_size(s_number_label, 296, 34);
+    lv_obj_set_pos(s_number_label, 10, 32);
+    lv_obj_set_size(s_number_label, 236, 44);
     lv_label_set_text(s_number_label, "Enter number");
 
-    /* Dialpad: 3x4 keys, 94x44 each so a fingertip fits without hitting the
-     * neighbour key. Pitch is 102x48, leaving a 10 px margin at the bottom. */
+    /* Keypad: 3x4 keys of 80x60 on a 88x68 pitch. */
     static const char *const keys[4][3] = {
         {"1", "2", "3"},
         {"4", "5", "6"},
@@ -272,31 +298,23 @@ esp_err_t ui_init(void)
     };
     for (int row = 0; row < 4; row++) {
         for (int col = 0; col < 3; col++) {
-            int x = 8 + col * 102;
-            int y = 74 + row * 48;
-            make_button(screen, x, y, 94, 44, keys[row][col], COL_CARD, COL_CARD_HI, COL_TEXT,
-                        &lv_font_montserrat_20, dial_key_cb, (void *)keys[row][col]);
+            int x = KEY_X0 + col * (KEY_W + KEY_GAP);
+            int y = KEY_Y0 + row * (KEY_H + KEY_GAP);
+            make_button(screen, x, y, KEY_W, KEY_H, keys[row][col], COL_CARD, COL_CARD_HI,
+                        COL_TEXT, &lv_font_montserrat_28, dial_key_cb, (void *)keys[row][col]);
         }
     }
 
-    /* Action column: the two buttons a call actually needs, at 52 px tall. */
-    make_button(screen, 312, 74, 160, 52, "CALL", COL_GREEN, 0x1E8449, COL_TEXT,
-                &lv_font_montserrat_20, call_cb, NULL);
-    lv_obj_t *del_btn = make_button(screen, 312, 132, 160, 52, "DELETE", COL_RED, 0xB03A2E,
-                                    COL_TEXT, &lv_font_montserrat_20, delete_cb, NULL);
+    /* Call actions under the keypad. */
+    lv_obj_t *del_btn = make_button(screen, CARD_X, ACTION_Y, ACTION_W, ACTION_H, "DELETE",
+                                    COL_RED, 0xB03A2E, COL_TEXT, &lv_font_montserrat_20,
+                                    delete_cb, NULL);
     lv_obj_add_event_cb(del_btn, delete_long_cb, LV_EVENT_LONG_PRESSED, NULL);
-
-    make_button(screen, 312, 190, 76, 38, "Contacts", COL_CARD, COL_CARD_HI, COL_TEXT,
-                &lv_font_montserrat_14, placeholder_cb, "Contacts: phase 5");
-    make_button(screen, 396, 190, 76, 38, "History", COL_CARD, COL_CARD_HI, COL_TEXT,
-                &lv_font_montserrat_14, placeholder_cb, "History: phase 5");
-    make_button(screen, 312, 232, 76, 38, "Settings", COL_CARD, COL_CARD_HI, COL_TEXT,
-                &lv_font_montserrat_14, placeholder_cb, "Settings: phase 5");
-    make_button(screen, 396, 232, 76, 38, "Status", COL_CARD, COL_CARD_HI, COL_TEXT,
-                &lv_font_montserrat_14, placeholder_cb, "Status: phase 5");
+    make_button(screen, 272 - CARD_X - ACTION_W, ACTION_Y, ACTION_W, ACTION_H, "CALL",
+                COL_GREEN, 0x1E8449, COL_TEXT, &lv_font_montserrat_20, call_cb, NULL);
 
     lv_timer_create(ui_tick_cb, 500, NULL);
 
-    ESP_LOGI(TAG, "Home screen ready (%dx%d)", 480, 272);
+    ESP_LOGI(TAG, "Home screen ready (272x480 portrait)");
     return ESP_OK;
 }
