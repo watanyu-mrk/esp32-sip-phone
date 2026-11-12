@@ -54,6 +54,11 @@ static void flush_cb(lv_display_t *display, const lv_area_t *area, uint8_t *px_m
     int x_end = area->x2 + 1;
     int y_end = area->y2 + 1;
 
+    /* Drop any completion left over from a previous frame so the wait below
+     * cannot succeed before this transfer has actually finished. */
+    while (xSemaphoreTake(s_flush_done, 0) == pdTRUE) {
+    }
+
     esp_err_t err = esp_lcd_panel_draw_bitmap(s_panel, x_start, y_start, x_end, y_end, px_map);
     if (err == ESP_OK) {
         if (xSemaphoreTake(s_flush_done, pdMS_TO_TICKS(LVGL_FLUSH_TIMEOUT_MS)) != pdTRUE) {

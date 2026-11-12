@@ -27,6 +27,7 @@ static const char *TAG = "TOUCH";
 static i2c_master_bus_handle_t s_bus;
 static i2c_master_dev_handle_t s_dev;
 static bool s_ready;
+static touch_point_t s_last;
 
 static esp_err_t gt911_read(uint16_t reg, uint8_t *buf, size_t len)
 {
@@ -151,22 +152,31 @@ bool touch_driver_read(touch_point_t *point)
 
     uint8_t status = 0;
     if (gt911_read(GT911_REG_STATUS, &status, 1) != ESP_OK) {
-        return false;
+        *point = s_last;
+        return true;
     }
     if ((status & 0x80) == 0) {
-        return false; /* controller has no new frame */
+        /* Bit 7 only rises when the controller has a new frame. Between
+         * frames the previous state must be returned as-is, otherwise LVGL
+         * sees a release on every read and a held key is dropped. */
+        *point = s_last;
+        return true;
     }
 
     uint8_t count = status & 0x0F;
     bool pressed = false;
+    uint16_t raw_x = 0;
+    uint16_t raw_y = 0;
     uint16_t x = 0;
     uint16_t y = 0;
 
     if (count > 0) {
         uint8_t data[8] = {0};
         if (gt911_read(GT911_REG_POINT1, data, sizeof(data)) == ESP_OK) {
-            x = (uint16_t)(data[1] | (data[2] << 8));
-            y = (uint16_t)(data[3] | (data[4] << 8));
+            raw_x = (uint16_t)(data[1] | (data[2] << 8));
+            raw_y = (uint16_t)(data[3] | (data[4] << 8));
+            x = raw_x;
+            y = raw_y;
             pressed = true;
         }
     }
@@ -174,7 +184,12 @@ bool touch_driver_read(touch_point_t *point)
     /* Release the buffer even when no point was reported. */
     gt911_write_u8(GT911_REG_STATUS, 0);
 
-    if (pressed) {
+    if (!pressed) {
+        /* Keep the last position so a release event still carries a sane
+         * coordinate (LVGL ignores it, logs do not). */
+        x = s_last.x;
+        y = s_last.y;
+    } else {
 #if TOUCH_SWAP_XY
         uint16_t tmp = x;
         x = y;
@@ -192,10 +207,17 @@ bool touch_driver_read(touch_point_t *point)
         if (y >= TOUCH_V_RES) {
             y = TOUCH_V_RES - 1;
         }
+
+        if (!s_last.pressed) {
+            /* One line per touch: proves the raw GT911 frame and the mapping
+             * that the UI actually receives. */
+            ESP_LOGI(TAG, "Touch raw (%u,%u) -> screen (%u,%u)", raw_x, raw_y, x, y);
+        }
     }
 
-    point->x = x;
-    point->y = y;
-    point->pressed = pressed;
+    s_last.x = x;
+    s_last.y = y;
+    s_last.pressed = pressed;
+    *point = s_last;
     return true;
 }

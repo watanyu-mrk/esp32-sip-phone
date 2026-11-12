@@ -69,6 +69,10 @@ static lv_obj_t *make_button(lv_obj_t *parent, int x, int y, int w, int h, const
 
     lv_obj_t *label = lv_label_create(btn);
     lv_label_set_text(label, text);
+    /* The theme gives a new label its own font, so set both explicitly;
+     * otherwise every key falls back to the 14 px default. */
+    lv_obj_set_style_text_font(label, font, 0);
+    lv_obj_set_style_text_color(label, lv_color_hex(text_color), 0);
     lv_obj_center(label);
 
     if (cb) {
@@ -254,11 +258,12 @@ esp_err_t ui_init(void)
     lv_obj_set_style_text_font(s_number_label, &lv_font_montserrat_28, 0);
     lv_obj_set_style_text_color(s_number_label, lv_color_hex(COL_DIM), 0);
     lv_obj_set_style_text_align(s_number_label, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_set_pos(s_number_label, 0, 32);
-    lv_obj_set_size(s_number_label, 480, 30);
+    lv_obj_set_pos(s_number_label, 8, 36);
+    lv_obj_set_size(s_number_label, 296, 34);
     lv_label_set_text(s_number_label, "Enter number");
 
-    /* Dialpad */
+    /* Dialpad: 3x4 keys, 94x44 each so a fingertip fits without hitting the
+     * neighbour key. Pitch is 102x48, leaving a 10 px margin at the bottom. */
     static const char *const keys[4][3] = {
         {"1", "2", "3"},
         {"4", "5", "6"},
@@ -267,37 +272,28 @@ esp_err_t ui_init(void)
     };
     for (int row = 0; row < 4; row++) {
         for (int col = 0; col < 3; col++) {
-            int x = 8 + col * 157;
-            int y = 66 + row * 44;
-            make_button(screen, x, y, 150, 38, keys[row][col], COL_CARD, COL_CARD_HI, COL_TEXT,
+            int x = 8 + col * 102;
+            int y = 74 + row * 48;
+            make_button(screen, x, y, 94, 44, keys[row][col], COL_CARD, COL_CARD_HI, COL_TEXT,
                         &lv_font_montserrat_20, dial_key_cb, (void *)keys[row][col]);
         }
     }
 
-    /* Bottom bar */
-    lv_obj_t *bar = lv_obj_create(screen);
-    lv_obj_remove_style_all(bar);
-    lv_obj_set_pos(bar, 0, 238);
-    lv_obj_set_size(bar, 480, 34);
-    lv_obj_set_style_bg_color(bar, lv_color_hex(COL_HEADER), 0);
-    lv_obj_set_style_bg_opa(bar, LV_OPA_COVER, 0);
-    lv_obj_clear_flag(bar, LV_OBJ_FLAG_SCROLLABLE);
-
-    make_button(bar, 6, 2, 60, 30, "Contacts", COL_CARD, COL_CARD_HI, COL_TEXT,
-                &lv_font_montserrat_14, placeholder_cb, "Contacts: phase 5");
-    make_button(bar, 70, 2, 60, 30, "History", COL_CARD, COL_CARD_HI, COL_TEXT,
-                &lv_font_montserrat_14, placeholder_cb, "History: phase 5");
-    make_button(bar, 134, 2, 60, 30, "Settings", COL_CARD, COL_CARD_HI, COL_TEXT,
-                &lv_font_montserrat_14, placeholder_cb, "Settings: phase 5");
-    make_button(bar, 198, 2, 60, 30, "Status", COL_CARD, COL_CARD_HI, COL_TEXT,
-                &lv_font_montserrat_14, placeholder_cb, "Status: phase 5");
-
-    lv_obj_t *call_btn = make_button(bar, 268, 2, 96, 30, "CALL", COL_GREEN, 0x1E8449, COL_TEXT,
-                                     &lv_font_montserrat_16, call_cb, NULL);
-    (void)call_btn;
-    lv_obj_t *del_btn = make_button(bar, 372, 2, 100, 30, "DELETE", COL_RED, 0xB03A2E, COL_TEXT,
-                                    &lv_font_montserrat_16, delete_cb, NULL);
+    /* Action column: the two buttons a call actually needs, at 52 px tall. */
+    make_button(screen, 312, 74, 160, 52, "CALL", COL_GREEN, 0x1E8449, COL_TEXT,
+                &lv_font_montserrat_20, call_cb, NULL);
+    lv_obj_t *del_btn = make_button(screen, 312, 132, 160, 52, "DELETE", COL_RED, 0xB03A2E,
+                                    COL_TEXT, &lv_font_montserrat_20, delete_cb, NULL);
     lv_obj_add_event_cb(del_btn, delete_long_cb, LV_EVENT_LONG_PRESSED, NULL);
+
+    make_button(screen, 312, 190, 76, 38, "Contacts", COL_CARD, COL_CARD_HI, COL_TEXT,
+                &lv_font_montserrat_14, placeholder_cb, "Contacts: phase 5");
+    make_button(screen, 396, 190, 76, 38, "History", COL_CARD, COL_CARD_HI, COL_TEXT,
+                &lv_font_montserrat_14, placeholder_cb, "History: phase 5");
+    make_button(screen, 312, 232, 76, 38, "Settings", COL_CARD, COL_CARD_HI, COL_TEXT,
+                &lv_font_montserrat_14, placeholder_cb, "Settings: phase 5");
+    make_button(screen, 396, 232, 76, 38, "Status", COL_CARD, COL_CARD_HI, COL_TEXT,
+                &lv_font_montserrat_14, placeholder_cb, "Status: phase 5");
 
     lv_timer_create(ui_tick_cb, 500, NULL);
 

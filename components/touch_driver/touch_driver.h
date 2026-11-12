@@ -39,8 +39,9 @@ typedef struct {
 
 esp_err_t touch_driver_init(void);
 
-/* Reads the controller and clears its buffer. Returns true when a new sample
- * was available (press, move, or release); false when nothing changed. */
+/* Reads the controller and clears its buffer. Always returns true once the
+ * controller is ready and fills the latest known state (held touches included),
+ * so callers never have to invent a release. */
 bool touch_driver_read(touch_point_t *point);
 
 /* True when the GT911 answered with its product ID during init. */
