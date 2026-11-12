@@ -2,7 +2,7 @@
 
 Touchscreen fork of the XIAO ESP32-S3 Sense SIP phone, retargeted to the **GUITION JC4827W543** (ESP32-S3, 4.3" 480x272 QSPI panel, GT911 touch) with an on-device **LVGL 9.3** UI. The SIP/RTP/config/web components are inherited unchanged.
 
-> **Status 2026-11-12:** Phase 1 (fork/hardware analysis) and Phase 2 (display, touch, LVGL home screen) are implemented and the firmware builds for esp32s3, but **nothing has been tested on this board yet** — no display, touch or audio hardware was attached. The legacy XIAO PDM/I2S path is disabled because GPIO8 is the GT911 SDA, so calls currently carry no audio until the Phase 3 migration. See `DEVELOPMENT_ROADMAP.md` and `BOARD_PIN_MAPPING.md`; the sections below describe the inherited SIP/audio/web behaviour on the original XIAO board.
+> **Status 2026-11-12:** Phase 1 (fork/hardware analysis), Phase 2 (display, touch, LVGL home screen) and Phase 3 (INMP441 + onboard amplifier audio backend) are implemented and the firmware builds for esp32s3, but **nothing has been tested on this board yet** — no display, touch or audio hardware was attached. The default audio backend is `SIP_PHONE_AUDIO_INMP441`; its amplifier pins (42/2/41) are unconfirmed and the microphone is not wired. See `DEVELOPMENT_ROADMAP.md`, `BOARD_PIN_MAPPING.md` and `AUDIO_MIGRATION_PLAN.md`; the sections below describe the inherited SIP/web behaviour on the original XIAO board.
 
 Firmware project for a desk SIP phone built on the **Seeed Studio XIAO ESP32-S3 Sense** with **ESP-IDF**. Target: register against FreePBX/Asterisk, place and answer calls, and exchange full-duplex G.711 audio, configured from a web browser.
 

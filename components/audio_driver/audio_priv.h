@@ -18,6 +18,10 @@
 #define AUDIO_PDM_SAMPLE_RATE_HZ (AUDIO_SAMPLE_RATE_HZ * 2)
 #define AUDIO_PDM_READ_SAMPLES   (AUDIO_FRAME_SAMPLES * 2)
 
+/* INMP441 capture runs at 16 kHz too, with 32-bit slots in the I2S frame. */
+#define AUDIO_I2S_MIC_RATE_HZ   (AUDIO_SAMPLE_RATE_HZ * 2)
+#define AUDIO_I2S_READ_SAMPLES  (AUDIO_FRAME_SAMPLES * 2)
+
 /* Ring depths in 20 ms frames. */
 #define AUDIO_INPUT_RING_BYTES \
     (AUDIO_FRAME_SAMPLES * sizeof(int16_t) * AUDIO_RING_BUFFER_FRAMES)

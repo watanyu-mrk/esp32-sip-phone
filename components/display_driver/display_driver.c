@@ -28,6 +28,7 @@ static const char *TAG = "DISPLAY";
 #define LCD_BACKLIGHT_DEFAULT_PERCENT 80
 
 static esp_lcd_panel_handle_t s_panel;
+static esp_lcd_panel_io_handle_t s_io;
 static uint8_t s_backlight_percent;
 
 esp_err_t display_driver_set_backlight(uint8_t percent)
@@ -55,6 +56,11 @@ uint8_t display_driver_get_backlight(void)
 esp_lcd_panel_handle_t display_driver_panel(void)
 {
     return s_panel;
+}
+
+esp_lcd_panel_io_handle_t display_driver_panel_io(void)
+{
+    return s_io;
 }
 
 static esp_err_t backlight_init(void)
@@ -126,6 +132,7 @@ esp_err_t display_driver_init(void)
     ESP_RETURN_ON_ERROR(esp_lcd_new_panel_io_spi((esp_lcd_spi_bus_handle_t)LCD_HOST, &io_config,
                                                  &io),
                         TAG, "panel IO init failed");
+    s_io = io;
 
     esp_lcd_panel_dev_config_t panel_config = {
         .reset_gpio_num = -1, /* no dedicated reset line on this board */

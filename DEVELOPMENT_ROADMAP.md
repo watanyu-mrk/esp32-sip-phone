@@ -20,11 +20,13 @@ Status as of 2026-11-12. Every phase must build; hardware claims are only made a
 - `ui`: home screen with header (device, Ext, Wi-Fi, SIP), number display, 12-key dialpad, delete (tap and long-press), CALL routed through `phone_control`, bottom bar placeholders.
 - Build verified. **Pending hardware:** first light, colour test, touch coordinate check, UI demo, frame rate under load.
 
-## Phase 3 — Audio migration
+## Phase 3 — Audio migration: IMPLEMENTED, NOT YET HARDWARE-TESTED
 
-- INMP441 I2S RX (GPIO6/7/15), amplifier I2S TX (pins confirmed from schematic).
-- Replace the XIAO PDM/I2S implementation behind the existing `audio_driver.h` API.
-- Validate mic level, speaker tone, full duplex, then a real call.
+- Kconfig now chooses the backend: `SIP_PHONE_AUDIO_NONE`, `SIP_PHONE_AUDIO_XIAO_PDM` or `SIP_PHONE_AUDIO_INMP441` (default). Only the selected backend's sources are compiled.
+- `audio_i2s_input.c`: INMP441 on GPIO6/7/15, 16 kHz 32-bit slots, decimated 2:1 to 8 kHz with the existing DC blocker, gain and level meter.
+- `audio_i2s_output.c`: onboard amplifier on GPIO42/2/41, 8 kHz mono 16-bit, bounded writes and auto-clear after underrun.
+- Public API (`audio_driver.h`) and therefore SIP/RTP/`phone_control` are untouched.
+- **Pending hardware:** amplifier part number and pins, mic level, speaker tone, full duplex, real call.
 
 ## Phase 4 — SIP integration on the new board
 

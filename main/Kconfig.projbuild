@@ -17,14 +17,35 @@ menu "SIP Phone"
             Password stored in plain text in NVS alongside the SSID. Leave empty
             for an open network. Enable NVS encryption before deploying.
 
-    config SIP_PHONE_LEGACY_XIAO_AUDIO
-        bool "Enable the XIAO PDM/I2S audio path"
-        default n
+    choice SIP_PHONE_AUDIO_BACKEND
+        prompt "Audio hardware"
+        default SIP_PHONE_AUDIO_INMP441
         help
-            The original XIAO ESP32-S3 Sense wiring (PDM mic 41/42, I2S out
-            7/8/9). On the JC4827W543 GPIO8 is the GT911 SDA and GPIO41/42 are
-            reserved for the onboard speaker amplifier, so this must stay off
-            until the INMP441/speaker migration is implemented.
+            Selects which audio driver is compiled. Only one backend can own
+            the I2S peripherals, and the XIAO wiring is invalid on this board.
+
+        config SIP_PHONE_AUDIO_NONE
+            bool "No audio backend"
+            help
+                No microphone or speaker driver is created. Calls still set up
+                and tear down over SIP but carry no audio. Use this for board
+                bring-up before the audio hardware is wired.
+
+        config SIP_PHONE_AUDIO_XIAO_PDM
+            bool "XIAO PDM mic + I2S speaker (41/42, 7/8/9)"
+            help
+                The original XIAO ESP32-S3 Sense wiring. Do not enable this on
+                the JC4827W543: GPIO8 is the GT911 SDA and GPIO41/42 drive the
+                onboard amplifier.
+
+        config SIP_PHONE_AUDIO_INMP441
+            bool "INMP441 mic + onboard I2S amplifier (6/7/15, 42/2/41)"
+            help
+                JC4827W543 backend. INMP441 SCK/WS/SD on GPIO6/7/15 with L/R
+                tied to ground; amplifier BCLK/LRC/DOUT on GPIO42/2/41. The
+                amplifier pins come from the project brief and are not yet
+                confirmed against the board schematic.
+    endchoice
 
     config SIP_PHONE_LEGACY_BUTTONS
         bool "Enable the XIAO ANSWER/HANGUP buttons"

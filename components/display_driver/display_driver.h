@@ -45,6 +45,9 @@ esp_err_t display_driver_init(void);
 /* Non-NULL after a successful display_driver_init(). */
 esp_lcd_panel_handle_t display_driver_panel(void);
 
+/* Panel IO handle, used by the LVGL port to receive transfer-complete events. */
+esp_lcd_panel_io_handle_t display_driver_panel_io(void);
+
 /* 0 = off, 100 = full brightness. Uses the LEDC PWM channel on GPIO1. */
 esp_err_t display_driver_set_backlight(uint8_t percent);
 uint8_t display_driver_get_backlight(void);

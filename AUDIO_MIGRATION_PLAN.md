@@ -1,6 +1,9 @@
 # Audio migration plan (Phase 3)
 
-The copied audio driver is XIAO-specific and is **disabled** in this build (`CONFIG_SIP_PHONE_LEGACY_XIAO_AUDIO=n`): its PDM clock/data and I2S pins collide with the GT911 and the planned speaker pins. Calls currently have no audio path on the new board. That is a known Phase 3 gap, not a working feature.
+Status (2026-11-12): the migration is **implemented**, not yet validated on hardware.
+
+- `SIP_PHONE_AUDIO_INMP441` (default) compiles `audio_i2s_input.c` + `audio_i2s_output.c`; the XIAO PDM/I2S sources are only compiled when `SIP_PHONE_AUDIO_XIAO_PDM` is selected, and `SIP_PHONE_AUDIO_NONE` builds no audio driver at all.
+- Nothing has been heard or recorded from a real board yet: the INMP441 is not wired and the amplifier pins below are still unconfirmed. Do not treat calls on this board as having working audio until the validation steps at the end of this document pass.
 
 ## Target hardware
 

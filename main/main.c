@@ -174,15 +174,16 @@ void app_main(void)
         connect_wifi_at_boot();
     }
 
-    /* The XIAO PDM/I2S wiring conflicts with this board (GPIO8 is touch SDA,
-     * GPIO41/42 move to the speaker amp), so it is off until the Phase 3
-     * INMP441/onboard-speaker driver replaces it. */
-#if CONFIG_SIP_PHONE_LEGACY_XIAO_AUDIO
+    /* Audio backend is selected in Kconfig. The JC4827W543 default is INMP441
+     * capture plus the onboard amplifier; the XIAO PDM/I2S wiring is not valid
+     * here because GPIO8 is touch SDA and GPIO41/42 feed the amplifier. */
+#if !CONFIG_SIP_PHONE_AUDIO_NONE
     esp_err_t audio_err = audio_driver_init();
     log_init_result("audio_driver", audio_err);
     if (audio_err == ESP_OK) {
-        /* Capture starts at boot so the serial meter proves the PDM mic works
-         * before any call exists. Playback stays idle until audio arrives. */
+        /* Capture starts at boot so the serial meter proves the microphone
+         * works before any call exists. Playback stays idle until audio
+         * arrives. */
         esp_err_t in_err = audio_input_start();
         if (in_err == ESP_OK) {
             ESP_LOGI(TAG, "[AUDIO] Microphone capture running, level meter on serial");
@@ -191,7 +192,7 @@ void app_main(void)
         }
     }
 #else
-    ESP_LOGW(TAG, "[AUDIO] Legacy PDM/I2S path disabled; audio migration pending (Phase 3)");
+    ESP_LOGW(TAG, "[AUDIO] No audio backend selected in Kconfig; calls will be silent");
 #endif
     log_init_result("sip_client", sip_client_init());
     log_init_result("rtp_audio", rtp_client_init());

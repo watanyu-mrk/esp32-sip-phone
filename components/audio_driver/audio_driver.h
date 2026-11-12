@@ -1,15 +1,20 @@
 /*
- * Audio capture (PDM mic) and playback (I2S TX) for G.711 narrowband audio.
+ * Audio capture and playback for G.711 narrowband audio.
  *
- * Implemented behaviour:
- *   - PDM RX at 16 kHz on PDM_DATA/PDM_CLK (GPIO41/42), decimated 2:1 to the
- *     8 kHz PCM the RTP layer will encode.
- *   - I2S standard TX at 8 kHz, mono 16-bit, on I2S_BCLK/LRC/DOUT (GPIO8/9/7).
+ * Two hardware backends implement the same API, selected in Kconfig:
+ *   - XIAO ESP32-S3 Sense: PDM RX at 16 kHz on GPIO41/42 decimated to 8 kHz,
+ *     I2S standard TX at 8 kHz on GPIO7/8/9. Not usable on the JC4827W543
+ *     because GPIO8 and GPIO41/42 are taken by touch and the speaker amp.
+ *   - JC4827W543: INMP441 I2S RX at 16 kHz on GPIO6/7/15 decimated to 8 kHz,
+ *     onboard amplifier I2S TX at 8 kHz on GPIO42/2/41.
+ *
+ * Common behaviour:
  *   - Capture and playback each run in a FreeRTOS task with a stream-buffer
  *     ring; every I2S read/write is bounded so SIP work cannot stall audio.
  *   - Software mic gain and speaker volume, plus a 1 Hz serial meter showing
  *     RMS and peak dBFS per stream.
- *   - Never start the SD SPI driver: GPIO7/8/9 are shared with the microSD.
+ *   - audio_driver_init() creates both channels; audio_input_start() and
+ *     audio_output_start() enable them.
  *
  * audio_driver_init() creates both channels; audio_input_start() and
  * audio_output_start() enable them. audio_read_pcm() waits at most 20 ms for a
@@ -22,13 +27,23 @@
 
 #include "esp_err.h"
 
-/* Board wiring, fixed by the project requirements. */
+/* XIAO ESP32-S3 Sense wiring (legacy backend). */
 #define I2S_DOUT 7
 #define I2S_BCLK 8
 #define I2S_LRC  9
 
 #define PDM_DATA 41
 #define PDM_CLK  42
+
+/* JC4827W543 wiring. INMP441 pins are free on this board; the amplifier pins
+ * come from the project brief and still need schematic confirmation. */
+#define INMP441_SCK 6
+#define INMP441_WS  7
+#define INMP441_SD  15
+
+#define AMP_BCLK 42
+#define AMP_LRC  2
+#define AMP_DOUT 41
 
 /* G.711 framing: 8 kHz mono, 20 ms packets. */
 #define AUDIO_SAMPLE_RATE_HZ  8000

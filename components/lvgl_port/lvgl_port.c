@@ -17,6 +17,8 @@
 #include "freertos/task.h"
 #include "lvgl.h"
 
+#include "esp_lcd_panel_io.h"
+
 #include "display_driver.h"
 #include "lvgl_port.h"
 #include "touch_driver.h"
@@ -122,6 +124,20 @@ esp_err_t lvgl_port_init(esp_lcd_panel_handle_t panel)
 {
     ESP_RETURN_ON_FALSE(panel, ESP_ERR_INVALID_ARG, TAG, "no panel handle");
     s_panel = panel;
+
+    /* The flush path waits for the QSPI transfer to finish so the draw buffer
+     * is not reused while DMA still reads it. */
+    esp_lcd_panel_io_handle_t io = display_driver_panel_io();
+    if (io != NULL) {
+        esp_lcd_panel_io_callbacks_t cbs = {
+            .on_color_trans_done = flush_done_cb,
+        };
+        esp_err_t cb_err = esp_lcd_panel_io_register_event_callbacks(io, &cbs, NULL);
+        if (cb_err != ESP_OK) {
+            ESP_LOGW(TAG, "Flush callback registration failed: %s (frames may tear)",
+                     esp_err_to_name(cb_err));
+        }
+    }
 
     ESP_LOGI(TAG, "Initializing LVGL...");
     lv_init();

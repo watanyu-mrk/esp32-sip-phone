@@ -14,7 +14,7 @@
 
 #define APP_NAME             "ESP32-S3 SIP IP Phone"
 #define APP_BOARD            "GUITION JC4827W543 (4.3\" 480x272)"
-#define APP_FIRMWARE_VERSION "0.3.0-screen"
+#define APP_FIRMWARE_VERSION "0.4.0-screen"
 
 /* Shared application state */
 #define APP_REMOTE_NUMBER_LEN 32
