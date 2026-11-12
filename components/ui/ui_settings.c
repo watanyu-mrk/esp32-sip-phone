@@ -2,17 +2,20 @@
  * Settings: a hub with four pages - display/audio, SIP account, Wi-Fi and
  * live status.
  *
- * All writes go through config_manager_set(), the same path the web UI uses,
- * so nothing here bypasses validation. Two behaviours match the web UI:
- *   - Wi-Fi credentials are applied immediately by reconnecting the station.
- *   - SIP changes are saved but need a reboot, because sip_client_init() reads
- *     the account once and returns early after that; the page offers a Reboot
- *     button instead of pretending the change is live.
+ * Text entry does not use lv_keyboard: on this 272x480 panel the LVGL keyboard
+ * widget never became visible, so every field is a button that opens a
+ * full-screen editor with a keypad built from ordinary lv_button objects -
+ * the same primitives as the dialpad, which are proven to render and accept
+ * touches on this board.
  *
- * Passwords are never logged.
+ * All writes go through config_manager_set(), the same path the web UI uses.
+ * Wi-Fi is applied immediately; SIP still needs a reboot because
+ * sip_client_init() reads the account only once, so the page offers a Reboot
+ * button instead of claiming the change is live. Passwords are never logged.
  */
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 #include "esp_heap_caps.h"
 #include "esp_log.h"
@@ -39,17 +42,44 @@ static const char *TAG = "UI.SET";
 #define COL_WARN     0xF39C12
 #define COL_RED      0xE74C3C
 
-/* Screen is 272x480; the keyboard covers the bottom 208 px while editing. */
 #define SCR_W 272
 #define SCR_H 480
-#define KB_H  208
 
-static lv_obj_t *s_home;     /* dialpad */
-static lv_obj_t *s_hub;      /* this settings menu */
+/* Editable fields, in the order the pages present them. */
+typedef enum {
+    F_SIP_SERVER = 0,
+    F_SIP_PORT,
+    F_SIP_EXT,
+    F_SIP_USER,
+    F_SIP_PASS,
+    F_WIFI_SSID,
+    F_WIFI_PASS,
+    F_COUNT
+} field_id_t;
+
+static const char *const s_field_name[F_COUNT] = {
+    "Server", "Port", "Extension", "Username", "Password", "SSID", "Password",
+};
+static const bool s_field_secret[F_COUNT] = {false, false, false, false, true, false, true};
+
+static lv_obj_t *s_home;
+static lv_obj_t *s_hub;
 static lv_obj_t *s_page_display;
 static lv_obj_t *s_page_sip;
 static lv_obj_t *s_page_wifi;
 static lv_obj_t *s_page_status;
+static lv_obj_t *s_page_edit;
+
+static lv_obj_t *s_field_btn[F_COUNT];
+static char s_field[F_COUNT][CFG_SECRET_LEN];
+
+static lv_obj_t *s_edit_title;
+static lv_obj_t *s_edit_value;
+static lv_obj_t *s_key_btn[4][10];
+static char s_key_ch[4][10][2];
+static char s_edit_buf[CFG_SECRET_LEN];
+static field_id_t s_edit_id;
+static bool s_shift;
 
 static lv_obj_t *s_brightness_slider;
 static lv_obj_t *s_brightness_label;
@@ -59,14 +89,6 @@ static lv_obj_t *s_gain_label;
 static lv_obj_t *s_info_label;
 static lv_obj_t *s_wifi_status;
 static lv_obj_t *s_sip_status;
-
-static lv_obj_t *s_sip_server;
-static lv_obj_t *s_sip_port;
-static lv_obj_t *s_sip_ext;
-static lv_obj_t *s_sip_user;
-static lv_obj_t *s_sip_pass;
-static lv_obj_t *s_wifi_ssid;
-static lv_obj_t *s_wifi_pass;
 static lv_obj_t *s_scan_list;
 static char s_scan_ssid[WIFI_MANAGER_SCAN_MAX][33];
 
@@ -159,82 +181,232 @@ static lv_obj_t *make_slider(lv_obj_t *parent, int x, int y, int w, int min, int
     return slider;
 }
 
-static lv_obj_t *make_textarea(lv_obj_t *page, int x, int y, int w, int h, const char *text,
-                               uint32_t max_len, bool password, lv_event_cb_t focus_cb,
-                               lv_obj_t *keyboard)
+/* ------------------------------------------------------------ editable box */
+
+static void field_refresh(field_id_t id)
 {
-    lv_obj_t *ta = lv_textarea_create(page);
-    lv_obj_set_pos(ta, x, y);
-    lv_obj_set_size(ta, w, h);
-    lv_textarea_set_one_line(ta, true);
-    lv_textarea_set_max_length(ta, max_len);
-    lv_textarea_set_text(ta, (text != NULL) ? text : "");
-    if (password) {
-        lv_textarea_set_password_mode(ta, true);
-    }
-
-    lv_obj_set_style_bg_color(ta, lv_color_hex(COL_BG), 0);
-    lv_obj_set_style_bg_opa(ta, LV_OPA_COVER, 0);
-    lv_obj_set_style_border_width(ta, 1, 0);
-    lv_obj_set_style_border_color(ta, lv_color_hex(COL_CARD_HI), 0);
-    lv_obj_set_style_radius(ta, 6, 0);
-    lv_obj_set_style_pad_all(ta, 6, 0);
-    lv_obj_set_style_text_color(ta, lv_color_hex(COL_TEXT), 0);
-    lv_obj_set_style_text_font(ta, &lv_font_montserrat_14, 0);
-
-    /* Registered by the page once its keyboard exists; a focus callback with
-     * a NULL keyboard would crash on the first tap. */
-    if (keyboard != NULL) {
-        lv_obj_add_event_cb(ta, focus_cb, LV_EVENT_CLICKED, keyboard);
-    }
-    return ta;
-}
-
-static void keyboard_event_cb(lv_event_t *event)
-{
-    lv_event_code_t code = lv_event_get_code(event);
-    if (code == LV_EVENT_READY || code == LV_EVENT_CANCEL) {
-        lv_obj_t *kb = lv_event_get_target(event);
-        lv_keyboard_set_textarea(kb, NULL);
-        lv_obj_add_flag(kb, LV_OBJ_FLAG_HIDDEN);
-    }
-}
-
-static lv_obj_t *make_keyboard(lv_obj_t *page)
-{
-    lv_obj_t *kb = lv_keyboard_create(page);
-    lv_obj_set_pos(kb, 0, SCR_H - KB_H);
-    lv_obj_set_size(kb, SCR_W, KB_H);
-    lv_obj_add_flag(kb, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_set_style_bg_color(kb, lv_color_hex(COL_CARD), 0);
-    lv_obj_set_style_bg_opa(kb, LV_OPA_COVER, 0);
-    lv_obj_add_event_cb(kb, keyboard_event_cb, LV_EVENT_ALL, NULL);
-    return kb;
-}
-
-static void show_keyboard(lv_obj_t *kb, lv_obj_t *ta, lv_keyboard_mode_t mode)
-{
-    if (kb == NULL || ta == NULL) {
+    lv_obj_t *btn = s_field_btn[id];
+    if (btn == NULL) {
         return;
     }
-    lv_keyboard_set_mode(kb, mode);
-    lv_keyboard_set_textarea(kb, ta);
-    lv_obj_clear_flag(kb, LV_OBJ_FLAG_HIDDEN);
-    /* A page rebuild or a dialog may have been added later; keep the keyboard
-     * above the fields it edits. */
-    lv_obj_move_foreground(kb);
+    lv_obj_t *label = lv_obj_get_child(btn, 0);
+    if (label == NULL) {
+        return;
+    }
+
+    const char *value = s_field[id];
+    if (value[0] == '\0') {
+        lv_label_set_text(label, "(tap to edit)");
+        lv_obj_set_style_text_color(label, lv_color_hex(COL_DIM), 0);
+    } else if (s_field_secret[id]) {
+        lv_label_set_text(label, "********");
+        lv_obj_set_style_text_color(label, lv_color_hex(COL_TEXT), 0);
+    } else {
+        lv_label_set_text(label, value);
+        lv_obj_set_style_text_color(label, lv_color_hex(COL_TEXT), 0);
+    }
+    lv_obj_align(label, LV_ALIGN_LEFT_MID, 8, 0);
 }
 
-static void ta_text_cb(lv_event_t *event)
+static void edit_refresh(void)
 {
-    show_keyboard(lv_event_get_user_data(event), lv_event_get_target(event),
-                  LV_KEYBOARD_MODE_TEXT_LOWER);
+    if (s_edit_value == NULL) {
+        return;
+    }
+    if (s_field_secret[s_edit_id]) {
+        char stars[CFG_SECRET_LEN + 1];
+        size_t len = strlen(s_edit_buf);
+        if (len >= sizeof(stars)) {
+            len = sizeof(stars) - 1;
+        }
+        memset(stars, '*', len);
+        stars[len] = '\0';
+        lv_label_set_text(s_edit_value, len ? stars : "(empty)");
+    } else {
+        lv_label_set_text(s_edit_value, s_edit_buf[0] ? s_edit_buf : "(empty)");
+    }
+    lv_obj_set_style_text_color(s_edit_value,
+                                lv_color_hex(s_edit_buf[0] ? COL_TEXT : COL_DIM), 0);
 }
 
-static void ta_number_cb(lv_event_t *event)
+static lv_obj_t *field_page(field_id_t id)
 {
-    show_keyboard(lv_event_get_user_data(event), lv_event_get_target(event),
-                  LV_KEYBOARD_MODE_NUMBER);
+    return (id == F_WIFI_SSID || id == F_WIFI_PASS) ? s_page_wifi : s_page_sip;
+}
+
+static void keys_refresh(void);
+
+static void open_editor(field_id_t id)
+{
+    s_edit_id = id;
+    snprintf(s_edit_buf, sizeof(s_edit_buf), "%s", s_field[id]);
+    s_shift = false;
+    keys_refresh();
+    lv_label_set_text_fmt(s_edit_title, "Edit %s", s_field_name[id]);
+    edit_refresh();
+    lv_screen_load(s_page_edit);
+}
+
+static void field_open_cb(lv_event_t *event)
+{
+    open_editor((field_id_t)(intptr_t)lv_event_get_user_data(event));
+}
+
+static lv_obj_t *make_field(lv_obj_t *page, int x, int y, int w, int h, field_id_t id)
+{
+    lv_obj_t *btn = lv_button_create(page);
+    lv_obj_remove_style_all(btn);
+    lv_obj_set_pos(btn, x, y);
+    lv_obj_set_size(btn, w, h);
+    lv_obj_add_flag(btn, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_style_bg_color(btn, lv_color_hex(COL_BG), 0);
+    lv_obj_set_style_bg_opa(btn, LV_OPA_COVER, 0);
+    lv_obj_set_style_bg_color(btn, lv_color_hex(COL_CARD_HI), LV_STATE_PRESSED);
+    lv_obj_set_style_border_width(btn, 1, 0);
+    lv_obj_set_style_border_color(btn, lv_color_hex(COL_CARD_HI), 0);
+    lv_obj_set_style_radius(btn, 6, 0);
+
+    lv_obj_t *label = lv_label_create(btn);
+    lv_obj_set_style_text_font(label, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_color(label, lv_color_hex(COL_DIM), 0);
+    lv_label_set_text(label, "");
+    lv_obj_align(label, LV_ALIGN_LEFT_MID, 8, 0);
+
+    s_field_btn[id] = btn;
+    field_refresh(id);
+    lv_obj_add_event_cb(btn, field_open_cb, LV_EVENT_CLICKED, (void *)(intptr_t)id);
+    return btn;
+}
+
+/* -------------------------------------------------------- editor keyboard */
+
+static const char *const s_rows_lower[4] = {
+    "1234567890",
+    "qwertyuiop",
+    "asdfghjkl@",
+    "zxcvbnm._-",
+};
+static const char *const s_rows_upper[4] = {
+    "1234567890",
+    "QWERTYUIOP",
+    "ASDFGHJKL@",
+    "ZXCVBNM._-",
+};
+
+static void keys_refresh(void)
+{
+    const char *const *rows = s_shift ? s_rows_upper : s_rows_lower;
+
+    for (int r = 0; r < 4; r++) {
+        for (int c = 0; c < 10; c++) {
+            char ch = rows[r][c];
+            s_key_ch[r][c][0] = ch;
+            s_key_ch[r][c][1] = '\0';
+            if (s_key_btn[r][c] != NULL) {
+                lv_obj_t *label = lv_obj_get_child(s_key_btn[r][c], 0);
+                if (label != NULL) {
+                    char text[2] = {ch, '\0'};
+                    lv_label_set_text(label, text);
+                }
+            }
+        }
+    }
+}
+
+static void key_cb(lv_event_t *event)
+{
+    const char *key = lv_event_get_user_data(event);
+    size_t len = strlen(s_edit_buf);
+
+    if (strcmp(key, "SH") == 0) {
+        s_shift = !s_shift;
+        keys_refresh();
+        return;
+    }
+    if (strcmp(key, "SP") == 0) {
+        if (len + 1 < sizeof(s_edit_buf)) {
+            s_edit_buf[len] = ' ';
+            s_edit_buf[len + 1] = '\0';
+        }
+        edit_refresh();
+        return;
+    }
+    if (strcmp(key, "BS") == 0) {
+        if (len > 0) {
+            s_edit_buf[len - 1] = '\0';
+        }
+        edit_refresh();
+        return;
+    }
+
+    /* The port field only ever holds digits. */
+    if (s_edit_id == F_SIP_PORT && (key[0] < '0' || key[0] > '9')) {
+        return;
+    }
+    if (len + 1 < sizeof(s_edit_buf)) {
+        s_edit_buf[len] = key[0];
+        s_edit_buf[len + 1] = '\0';
+    }
+    edit_refresh();
+}
+
+static void edit_cancel_cb(lv_event_t *event)
+{
+    (void)event;
+    lv_screen_load(field_page(s_edit_id));
+}
+
+static void edit_ok_cb(lv_event_t *event)
+{
+    (void)event;
+    snprintf(s_field[s_edit_id], sizeof(s_field[s_edit_id]), "%s", s_edit_buf);
+    field_refresh(s_edit_id);
+    ESP_LOGI(TAG, "Field '%s' updated", s_field_name[s_edit_id]);
+    lv_screen_load(field_page(s_edit_id));
+}
+
+static void build_editor_page(void)
+{
+    s_page_edit = make_page();
+
+    lv_obj_t *header = lv_obj_create(s_page_edit);
+    lv_obj_remove_style_all(header);
+    lv_obj_set_pos(header, 0, 0);
+    lv_obj_set_size(header, SCR_W, 30);
+    lv_obj_set_style_bg_color(header, lv_color_hex(COL_HEADER), 0);
+    lv_obj_set_style_bg_opa(header, LV_OPA_COVER, 0);
+    lv_obj_clear_flag(header, LV_OBJ_FLAG_SCROLLABLE);
+
+    s_edit_title = make_label(header, 8, 6, &lv_font_montserrat_16, COL_TEXT, "Edit");
+    make_button(header, 190, 4, 74, 22, "Cancel", COL_CARD, COL_CARD_HI,
+                &lv_font_montserrat_14, edit_cancel_cb, NULL);
+
+    lv_obj_t *box = make_card(s_page_edit, 8, 36, 256, 40);
+    s_edit_value = make_label(box, 10, 10, &lv_font_montserrat_16, COL_TEXT, "");
+    lv_obj_set_size(s_edit_value, 236, 22);
+
+    for (int r = 0; r < 4; r++) {
+        for (int c = 0; c < 10; c++) {
+            int x = 7 + c * 26;
+            int y = 86 + r * 42;
+            s_key_btn[r][c] = make_button(s_page_edit, x, y, 24, 40, "", COL_CARD, COL_PRIMARY,
+                                          &lv_font_montserrat_14, key_cb, s_key_ch[r][c]);
+        }
+    }
+    keys_refresh();
+
+    make_button(s_page_edit, 8, 260, 72, 38, "abc", COL_CARD_HI, COL_PRIMARY,
+                &lv_font_montserrat_14, key_cb, "SH");
+    make_button(s_page_edit, 86, 260, 100, 38, "SPACE", COL_CARD, COL_PRIMARY,
+                &lv_font_montserrat_14, key_cb, "SP");
+    make_button(s_page_edit, 192, 260, 72, 38, "DEL", COL_CARD, COL_PRIMARY,
+                &lv_font_montserrat_14, key_cb, "BS");
+
+    make_button(s_page_edit, 8, 310, 256, 46, "OK", COL_GREEN, 0x1E8449,
+                &lv_font_montserrat_20, edit_ok_cb, NULL);
+
+    make_label(s_page_edit, 8, 366, &lv_font_montserrat_14, COL_DIM,
+               "Cancel keeps the previous value.");
 }
 
 /* ------------------------------------------------------------- navigation */
@@ -349,11 +521,8 @@ static void gain_up_cb(lv_event_t *event)
 static void sip_save_cb(lv_event_t *event)
 {
     (void)event;
-    const char *server = lv_textarea_get_text(s_sip_server);
-    const char *port_text = lv_textarea_get_text(s_sip_port);
-    const char *ext = lv_textarea_get_text(s_sip_ext);
-    const char *user = lv_textarea_get_text(s_sip_user);
-    const char *pass = lv_textarea_get_text(s_sip_pass);
+    const char *server = s_field[F_SIP_SERVER];
+    const char *ext = s_field[F_SIP_EXT];
 
     if (server[0] == '\0' || ext[0] == '\0') {
         lv_obj_set_style_text_color(s_sip_status, lv_color_hex(COL_WARN), 0);
@@ -361,18 +530,24 @@ static void sip_save_cb(lv_event_t *event)
         return;
     }
 
-    long port = strtol(port_text, NULL, 10);
+    long port = strtol(s_field[F_SIP_PORT], NULL, 10);
     if (port < 1 || port > 65535) {
         port = 5060;
     }
 
     phone_config_t cfg = *config_manager_get();
-    snprintf(cfg.sip.server, sizeof(cfg.sip.server), "%s", server);
+    /* Bound the source to the destination capacity: the editor buffers are
+     * larger than several SIP fields, and -Wformat-truncation is fatal here. */
+    snprintf(cfg.sip.server, sizeof(cfg.sip.server), "%.*s",
+             (int)sizeof(cfg.sip.server) - 1, server);
     cfg.sip.port = (uint16_t)port;
-    snprintf(cfg.sip.extension, sizeof(cfg.sip.extension), "%s", ext);
-    snprintf(cfg.sip.username, sizeof(cfg.sip.username), "%s", (user[0] != '\0') ? user : ext);
-    if (pass[0] != '\0') {
-        snprintf(cfg.sip.password, sizeof(cfg.sip.password), "%s", pass);
+    snprintf(cfg.sip.extension, sizeof(cfg.sip.extension), "%.*s",
+             (int)sizeof(cfg.sip.extension) - 1, ext);
+    const char *user = (s_field[F_SIP_USER][0] != '\0') ? s_field[F_SIP_USER] : ext;
+    snprintf(cfg.sip.username, sizeof(cfg.sip.username), "%.*s",
+             (int)sizeof(cfg.sip.username) - 1, user);
+    if (s_field[F_SIP_PASS][0] != '\0') {
+        snprintf(cfg.sip.password, sizeof(cfg.sip.password), "%s", s_field[F_SIP_PASS]);
     }
 
     esp_err_t err = config_manager_set(&cfg);
@@ -401,8 +576,7 @@ static void reboot_cb(lv_event_t *event)
 static void wifi_connect_cb(lv_event_t *event)
 {
     (void)event;
-    const char *ssid = lv_textarea_get_text(s_wifi_ssid);
-    const char *pass = lv_textarea_get_text(s_wifi_pass);
+    const char *ssid = s_field[F_WIFI_SSID];
 
     if (ssid[0] == '\0') {
         lv_obj_set_style_text_color(s_wifi_status, lv_color_hex(COL_WARN), 0);
@@ -411,9 +585,10 @@ static void wifi_connect_cb(lv_event_t *event)
     }
 
     phone_config_t cfg = *config_manager_get();
-    snprintf(cfg.wifi.ssid, sizeof(cfg.wifi.ssid), "%s", ssid);
-    if (pass[0] != '\0') {
-        snprintf(cfg.wifi.password, sizeof(cfg.wifi.password), "%s", pass);
+    snprintf(cfg.wifi.ssid, sizeof(cfg.wifi.ssid), "%.*s", (int)sizeof(cfg.wifi.ssid) - 1,
+             ssid);
+    if (s_field[F_WIFI_PASS][0] != '\0') {
+        snprintf(cfg.wifi.password, sizeof(cfg.wifi.password), "%s", s_field[F_WIFI_PASS]);
     }
 
     esp_err_t err = config_manager_set(&cfg);
@@ -436,6 +611,63 @@ static void wifi_connect_cb(lv_event_t *event)
     lv_obj_set_style_text_color(s_wifi_status, lv_color_hex(COL_WARN), 0);
     lv_label_set_text(s_wifi_status, "Saved, connecting...");
     ESP_LOGI(TAG, "Wi-Fi saved (SSID '%s'), reconnecting", cfg.wifi.ssid);
+}
+
+static void wifi_pick_cb(lv_event_t *event)
+{
+    const char *ssid = lv_event_get_user_data(event);
+    if (ssid == NULL) {
+        return;
+    }
+    snprintf(s_field[F_WIFI_SSID], sizeof(s_field[F_WIFI_SSID]), "%s", ssid);
+    field_refresh(F_WIFI_SSID);
+    lv_label_set_text_fmt(s_wifi_status, "Selected %s", ssid);
+    lv_obj_set_style_text_color(s_wifi_status, lv_color_hex(COL_DIM), 0);
+}
+
+static void wifi_scan_cb(lv_event_t *event)
+{
+    (void)event;
+
+    /* The scan blocks for a few seconds; paint the notice first. */
+    lv_obj_set_style_text_color(s_wifi_status, lv_color_hex(COL_WARN), 0);
+    lv_label_set_text(s_wifi_status, "Scanning...");
+    lv_refr_now(NULL);
+
+    wifi_scan_ap_t aps[WIFI_MANAGER_SCAN_MAX];
+    int found = wifi_manager_scan(aps, WIFI_MANAGER_SCAN_MAX);
+
+    lv_obj_clean(s_scan_list);
+    if (found <= 0) {
+        lv_obj_set_style_text_color(s_wifi_status, lv_color_hex(COL_WARN), 0);
+        lv_label_set_text(s_wifi_status, (found == 0) ? "No networks found" : "Scan failed");
+        return;
+    }
+
+    for (int i = 0; i < found; i++) {
+        snprintf(s_scan_ssid[i], sizeof(s_scan_ssid[i]), "%s", aps[i].ssid);
+
+        lv_obj_t *row = lv_button_create(s_scan_list);
+        lv_obj_remove_style_all(row);
+        lv_obj_set_size(row, 240, 34);
+        lv_obj_add_flag(row, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_set_style_bg_color(row, lv_color_hex(COL_CARD), 0);
+        lv_obj_set_style_bg_opa(row, LV_OPA_COVER, 0);
+        lv_obj_set_style_bg_color(row, lv_color_hex(COL_CARD_HI), LV_STATE_PRESSED);
+        lv_obj_set_style_radius(row, 6, 0);
+
+        lv_obj_t *label = lv_label_create(row);
+        lv_label_set_text_fmt(label, "%s  %d dBm%s", aps[i].ssid, (int)aps[i].rssi,
+                              aps[i].secure ? " *" : "");
+        lv_obj_set_style_text_font(label, &lv_font_montserrat_14, 0);
+        lv_obj_set_style_text_color(label, lv_color_hex(COL_TEXT), 0);
+        lv_obj_align(label, LV_ALIGN_LEFT_MID, 8, 0);
+
+        lv_obj_add_event_cb(row, wifi_pick_cb, LV_EVENT_CLICKED, s_scan_ssid[i]);
+    }
+
+    lv_obj_set_style_text_color(s_wifi_status, lv_color_hex(COL_DIM), 0);
+    lv_label_set_text_fmt(s_wifi_status, "%d networks - tap to pick", found);
 }
 
 /* ---------------------------------------------------------------- status */
@@ -541,30 +773,22 @@ static void build_display_page(void)
 
 static void build_sip_page(void)
 {
-    const phone_config_t *cfg = config_manager_get();
     s_page_sip = make_page();
     add_header(s_page_sip, "SIP account", back_hub_cb);
 
     make_label(s_page_sip, 8, 32, &lv_font_montserrat_14, COL_DIM, "Server");
-    s_sip_server = make_textarea(s_page_sip, 8, 48, 256, 30, cfg ? cfg->sip.server : "",
-                                 CFG_SERVER_LEN - 1, false, ta_text_cb, NULL);
+    make_field(s_page_sip, 8, 48, 256, 30, F_SIP_SERVER);
 
     make_label(s_page_sip, 8, 84, &lv_font_montserrat_14, COL_DIM, "Port");
-    char port_text[8] = {0};
-    snprintf(port_text, sizeof(port_text), "%u", (unsigned)(cfg ? cfg->sip.port : 5060));
-    s_sip_port = make_textarea(s_page_sip, 8, 100, 110, 30, port_text, 5, false, ta_number_cb, NULL);
-
+    make_field(s_page_sip, 8, 100, 110, 30, F_SIP_PORT);
     make_label(s_page_sip, 134, 84, &lv_font_montserrat_14, COL_DIM, "Extension");
-    s_sip_ext = make_textarea(s_page_sip, 134, 100, 130, 30, cfg ? cfg->sip.extension : "",
-                              CFG_EXT_LEN - 1, false, ta_number_cb, NULL);
+    make_field(s_page_sip, 134, 100, 130, 30, F_SIP_EXT);
 
     make_label(s_page_sip, 8, 136, &lv_font_montserrat_14, COL_DIM, "Username");
-    s_sip_user = make_textarea(s_page_sip, 8, 152, 256, 30, cfg ? cfg->sip.username : "",
-                               CFG_ID_LEN - 1, false, ta_text_cb, NULL);
+    make_field(s_page_sip, 8, 152, 256, 30, F_SIP_USER);
 
     make_label(s_page_sip, 8, 188, &lv_font_montserrat_14, COL_DIM, "Password (blank = keep)");
-    s_sip_pass = make_textarea(s_page_sip, 8, 204, 256, 30, "", CFG_SECRET_LEN - 1, true,
-                               ta_text_cb, NULL);
+    make_field(s_page_sip, 8, 204, 256, 30, F_SIP_PASS);
 
     make_button(s_page_sip, 8, 244, 120, 34, "Save", COL_GREEN, 0x1E8449,
                 &lv_font_montserrat_16, sip_save_cb, NULL);
@@ -574,93 +798,20 @@ static void build_sip_page(void)
     s_sip_status = make_label(s_page_sip, 8, 288, &lv_font_montserrat_14, COL_DIM, "");
     lv_obj_set_size(s_sip_status, 256, 60);
     lv_label_set_text(s_sip_status, "Changes apply after reboot.");
-
-    /* One keyboard per text-entry page, hidden until a field is tapped. Both
-     * FOCUSED and CLICKED are wired: a textarea consumes the click to place
-     * its cursor, so CLICKED alone does not always arrive, while FOCUSED does
-     * not repeat when the same field is tapped twice after closing the board. */
-    lv_obj_t *kb = make_keyboard(s_page_sip);
-    lv_obj_t *fields[] = {s_sip_server, s_sip_port, s_sip_ext, s_sip_user, s_sip_pass};
-    for (size_t i = 0; i < sizeof(fields) / sizeof(fields[0]); i++) {
-        lv_event_cb_t cb = (fields[i] == s_sip_port || fields[i] == s_sip_ext) ? ta_number_cb
-                                                                               : ta_text_cb;
-        lv_obj_add_event_cb(fields[i], cb, LV_EVENT_CLICKED, kb);
-        lv_obj_add_event_cb(fields[i], cb, LV_EVENT_FOCUSED, kb);
-    }
-}
-
-static void wifi_pick_cb(lv_event_t *event)
-{
-    const char *ssid = lv_event_get_user_data(event);
-    if (ssid == NULL) {
-        return;
-    }
-    lv_textarea_set_text(s_wifi_ssid, ssid);
-    lv_label_set_text_fmt(s_wifi_status, "Selected %s", ssid);
-    lv_obj_set_style_text_color(s_wifi_status, lv_color_hex(COL_DIM), 0);
-}
-
-static void wifi_scan_cb(lv_event_t *event)
-{
-    (void)event;
-
-    /* The scan blocks for a few seconds; paint the notice first. */
-    lv_obj_set_style_text_color(s_wifi_status, lv_color_hex(COL_WARN), 0);
-    lv_label_set_text(s_wifi_status, "Scanning...");
-    lv_refr_now(NULL);
-
-    wifi_scan_ap_t aps[WIFI_MANAGER_SCAN_MAX];
-    int found = wifi_manager_scan(aps, WIFI_MANAGER_SCAN_MAX);
-
-    lv_obj_clean(s_scan_list);
-    if (found <= 0) {
-        lv_obj_set_style_text_color(s_wifi_status, lv_color_hex(COL_WARN), 0);
-        lv_label_set_text(s_wifi_status,
-                          (found == 0) ? "No networks found" : "Scan failed");
-        return;
-    }
-
-    for (int i = 0; i < found; i++) {
-        snprintf(s_scan_ssid[i], sizeof(s_scan_ssid[i]), "%s", aps[i].ssid);
-
-        lv_obj_t *row = lv_button_create(s_scan_list);
-        lv_obj_remove_style_all(row);
-        lv_obj_set_size(row, 240, 34);
-        lv_obj_add_flag(row, LV_OBJ_FLAG_CLICKABLE);
-        lv_obj_set_style_bg_color(row, lv_color_hex(COL_CARD), 0);
-        lv_obj_set_style_bg_opa(row, LV_OPA_COVER, 0);
-        lv_obj_set_style_bg_color(row, lv_color_hex(COL_CARD_HI), LV_STATE_PRESSED);
-        lv_obj_set_style_radius(row, 6, 0);
-
-        lv_obj_t *label = lv_label_create(row);
-        lv_label_set_text_fmt(label, "%s  %d dBm%s", aps[i].ssid, (int)aps[i].rssi,
-                              aps[i].secure ? " *" : "");
-        lv_obj_set_style_text_font(label, &lv_font_montserrat_14, 0);
-        lv_obj_set_style_text_color(label, lv_color_hex(COL_TEXT), 0);
-        lv_obj_align(label, LV_ALIGN_LEFT_MID, 8, 0);
-
-        lv_obj_add_event_cb(row, wifi_pick_cb, LV_EVENT_CLICKED, s_scan_ssid[i]);
-    }
-
-    lv_obj_set_style_text_color(s_wifi_status, lv_color_hex(COL_DIM), 0);
-    lv_label_set_text_fmt(s_wifi_status, "%d networks - tap to pick", found);
 }
 
 static void build_wifi_page(void)
 {
-    const phone_config_t *cfg = config_manager_get();
     s_page_wifi = make_page();
     add_header(s_page_wifi, "Wi-Fi", back_hub_cb);
 
     make_label(s_page_wifi, 8, 32, &lv_font_montserrat_14, COL_DIM, "SSID");
-    s_wifi_ssid = make_textarea(s_page_wifi, 8, 48, 190, 30, cfg ? cfg->wifi.ssid : "",
-                                CFG_SSID_LEN - 1, false, ta_text_cb, NULL);
+    make_field(s_page_wifi, 8, 48, 190, 30, F_WIFI_SSID);
     make_button(s_page_wifi, 204, 48, 60, 30, "Scan", COL_PRIMARY, 0x1F4FB0,
                 &lv_font_montserrat_14, wifi_scan_cb, NULL);
 
     make_label(s_page_wifi, 8, 84, &lv_font_montserrat_14, COL_DIM, "Password (blank = keep)");
-    s_wifi_pass = make_textarea(s_page_wifi, 8, 100, 256, 30, "", CFG_SECRET_LEN - 1, true,
-                                ta_text_cb, NULL);
+    make_field(s_page_wifi, 8, 100, 256, 30, F_WIFI_PASS);
 
     make_button(s_page_wifi, 8, 138, 130, 34, "Connect", COL_GREEN, 0x1E8449,
                 &lv_font_montserrat_16, wifi_connect_cb, NULL);
@@ -668,7 +819,6 @@ static void build_wifi_page(void)
     s_wifi_status = make_label(s_page_wifi, 8, 180, &lv_font_montserrat_14, COL_DIM, "");
     lv_obj_set_size(s_wifi_status, 256, 30);
 
-    /* Scan results: a scrollable column, one button per network. */
     s_scan_list = lv_obj_create(s_page_wifi);
     lv_obj_remove_style_all(s_scan_list);
     lv_obj_set_pos(s_scan_list, 8, 214);
@@ -679,13 +829,6 @@ static void build_wifi_page(void)
     lv_obj_set_scroll_dir(s_scan_list, LV_DIR_VER);
 
     make_label(s_page_wifi, 8, 398, &lv_font_montserrat_14, COL_DIM, "* = secured network");
-
-    lv_obj_t *kb = make_keyboard(s_page_wifi);
-    lv_obj_t *fields[] = {s_wifi_ssid, s_wifi_pass};
-    for (size_t i = 0; i < sizeof(fields) / sizeof(fields[0]); i++) {
-        lv_obj_add_event_cb(fields[i], ta_text_cb, LV_EVENT_CLICKED, kb);
-        lv_obj_add_event_cb(fields[i], ta_text_cb, LV_EVENT_FOCUSED, kb);
-    }
 }
 
 static void build_status_page(void)
@@ -715,20 +858,38 @@ static void build_hub(void)
     make_label(s_hub, 8, 440, &lv_font_montserrat_14, COL_DIM, "Web UI: http://<ip>/ port 80");
 }
 
+static void load_fields(void)
+{
+    const phone_config_t *cfg = config_manager_get();
+    if (cfg == NULL) {
+        return;
+    }
+    snprintf(s_field[F_SIP_SERVER], sizeof(s_field[F_SIP_SERVER]), "%s", cfg->sip.server);
+    snprintf(s_field[F_SIP_PORT], sizeof(s_field[F_SIP_PORT]), "%u", (unsigned)cfg->sip.port);
+    snprintf(s_field[F_SIP_EXT], sizeof(s_field[F_SIP_EXT]), "%s", cfg->sip.extension);
+    snprintf(s_field[F_SIP_USER], sizeof(s_field[F_SIP_USER]), "%s", cfg->sip.username);
+    snprintf(s_field[F_WIFI_SSID], sizeof(s_field[F_WIFI_SSID]), "%s", cfg->wifi.ssid);
+    /* Password boxes start empty: blank means "keep the stored secret". */
+    s_field[F_SIP_PASS][0] = '\0';
+    s_field[F_WIFI_PASS][0] = '\0';
+}
+
 void ui_settings_create(lv_obj_t *home_screen)
 {
     s_home = home_screen;
+    load_fields();
 
     build_hub();
     build_display_page();
     build_sip_page();
     build_wifi_page();
     build_status_page();
+    build_editor_page();
 
     info_tick_cb(NULL);
     lv_timer_create(info_tick_cb, 1000, NULL);
 
-    ESP_LOGI(TAG, "Settings hub ready (4 pages)");
+    ESP_LOGI(TAG, "Settings hub ready (5 pages incl. editor)");
 }
 
 void ui_settings_open(void)
