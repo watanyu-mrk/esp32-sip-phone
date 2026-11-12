@@ -536,6 +536,12 @@ static void sip_save_cb(lv_event_t *event)
     }
 
     phone_config_t cfg = *config_manager_get();
+    /* This screen has no auth-ID field, so the digest identity has to follow
+     * the account. Only rewrite it when it was tracking the old identity:
+     * an auth ID deliberately set from the web UI is left alone. */
+    bool auth_id_tracks_account = cfg.sip.auth_id[0] == '\0' ||
+                                  strcmp(cfg.sip.auth_id, cfg.sip.username) == 0 ||
+                                  strcmp(cfg.sip.auth_id, cfg.sip.extension) == 0;
     /* Bound the source to the destination capacity: the editor buffers are
      * larger than several SIP fields, and -Wformat-truncation is fatal here. */
     snprintf(cfg.sip.server, sizeof(cfg.sip.server), "%.*s",
@@ -546,6 +552,10 @@ static void sip_save_cb(lv_event_t *event)
     const char *user = (s_field[F_SIP_USER][0] != '\0') ? s_field[F_SIP_USER] : ext;
     snprintf(cfg.sip.username, sizeof(cfg.sip.username), "%.*s",
              (int)sizeof(cfg.sip.username) - 1, user);
+    if (auth_id_tracks_account) {
+        snprintf(cfg.sip.auth_id, sizeof(cfg.sip.auth_id), "%.*s",
+                 (int)sizeof(cfg.sip.auth_id) - 1, user);
+    }
     if (s_field[F_SIP_PASS][0] != '\0') {
         snprintf(cfg.sip.password, sizeof(cfg.sip.password), "%s", s_field[F_SIP_PASS]);
     }
@@ -560,8 +570,8 @@ static void sip_save_cb(lv_event_t *event)
 
     lv_obj_set_style_text_color(s_sip_status, lv_color_hex(COL_GREEN), 0);
     lv_label_set_text(s_sip_status, "Saved. Reboot to register.");
-    ESP_LOGI(TAG, "SIP account saved (server '%s', extension '%s')", cfg.sip.server,
-             cfg.sip.extension);
+    ESP_LOGI(TAG, "SIP account saved (server '%s', extension '%s', auth id '%s')",
+             cfg.sip.server, cfg.sip.extension, cfg.sip.auth_id);
 }
 
 static void reboot_cb(lv_event_t *event)

@@ -603,6 +603,13 @@ static void handle_register_response(const sip_msg_t *m)
 
         ESP_LOGI(TAG, "[SIP] %d challenge realm='%s' qop=%s", m->status, s_realm,
                  qop_auth ? "auth" : "none");
+        /* The digest we build assumes plain MD5; print the header once so a
+         * PBX demanding MD5-sess or a different algorithm is visible. */
+        static bool logged_challenge;
+        if (!logged_challenge) {
+            logged_challenge = true;
+            ESP_LOGI(TAG, "[SIP] Challenge header: %s", hdr);
+        }
 
         if (new_nonce) {
             send_register_ex(s_reg_expiry > 0 ? s_reg_expiry : 300);
@@ -1458,6 +1465,12 @@ esp_err_t sip_client_init(void)
     ESP_LOGI(TAG, "[SIP] Initializing SIP UA");
     ESP_LOGI(TAG, "[SIP] Server: %s:%u", s_acc.host, (unsigned)s_acc.port);
     ESP_LOGI(TAG, "[SIP] Extension: %s", s_acc.ext);
+    /* Which identity digest answers with, and whether a secret exists at all:
+     * a stale auth id or an empty password looks identical to "server rejected
+     * us" in the 401 loop. */
+    ESP_LOGI(TAG, "[SIP] Digest user: %s (auth id '%s'), password %s (%u chars)",
+             (s_acc.auth_id[0] != '\0') ? s_acc.auth_id : s_acc.user, s_acc.user,
+             (s_acc.pass[0] != '\0') ? "set" : "EMPTY", (unsigned)strlen(s_acc.pass));
 
     s_link_up = wifi_manager_is_connected();
     s_running = true;
