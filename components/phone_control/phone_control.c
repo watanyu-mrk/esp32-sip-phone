@@ -11,6 +11,7 @@ static const char *TAG = "PHONE";
 
 static bool s_initialised;
 
+#if CONFIG_SIP_PHONE_LEGACY_BUTTONS
 static void on_button(button_id_t id, button_event_t event)
 {
     if (event == BUTTON_EVENT_RELEASED) {
@@ -55,6 +56,7 @@ static void on_button(button_id_t id, button_event_t event)
         ESP_LOGD(TAG, "[PHONE] Nothing to hang up (%s)", esp_err_to_name(err));
     }
 }
+#endif /* CONFIG_SIP_PHONE_LEGACY_BUTTONS */
 
 esp_err_t phone_control_init(void)
 {
@@ -62,10 +64,14 @@ esp_err_t phone_control_init(void)
         return ESP_OK;
     }
 
+#if CONFIG_SIP_PHONE_LEGACY_BUTTONS
     esp_err_t err = button_init(on_button);
     if (err != ESP_OK) {
         return err;
     }
+#else
+    ESP_LOGI(TAG, "[PHONE] Physical buttons disabled (touch UI build)");
+#endif
 
     s_initialised = true;
     ESP_LOGI(TAG, "[PHONE] Ready");

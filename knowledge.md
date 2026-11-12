@@ -1,5 +1,29 @@
 # knowledge.md
 
+## Screen edition — this repository (2026-11-12)
+
+This is the touchscreen fork of the XIAO phone: `C:\Users\Mrk\ESP32SipPhone_screen`, created from `../ESP32SipPhone` with its Git history and **no changes to the original**. The requirements document is `ipPnoneUpdatePromp.txt` (Thai). The project targets the **GUITION JC4827W543**: ESP32-S3-WROOM-1-N4R8, 4 MB flash, 8 MB octal PSRAM, 4.3" 480x272 IPS panel on **QSPI** (NV3041A protocol; Guition's PDF calls the chip ST3401A), **GT911** capacitive touch, backlight GPIO1.
+
+Phase 1 and Phase 2 are implemented: new `display_driver`, `touch_driver`, `lvgl_port` and `ui` components; 4 MB partition table; LVGL 9.3.0 from the component registry. `ninja -C build` passes (ESP-IDF 5.5.6), app `0x1497e0` bytes, 31% of the 1.875 MB OTA slot free. **No display/touch/audio hardware test has happened yet.** The reused SIP/RTP/web/config code is unchanged and still compiles.
+
+Hardware conflicts handled in this fork: GPIO8 is GT911 SDA but was I2S BCLK, GPIO3 is GT911 INT but was ANSWER, and GPIO41/42 are reserved for the speaker amp but were PDM mic pins. `CONFIG_SIP_PHONE_LEGACY_XIAO_AUDIO` and `CONFIG_SIP_PHONE_LEGACY_BUTTONS` default to `n`; calls on this board have **no audio path** until Phase 3.
+
+Build recipe in this environment: `idf.py` refuses to run under Git Bash (`MSYSTEM` is present even after `unset`), so configure/build through a Python wrapper that pops `MSYSTEM` and calls CMake/Ninja directly:
+
+```bash
+export IDF_PATH=/c/esp/esp-idf
+export ESP_ROM_ELF_DIR="$(cygpath -w /c/Users/Mrk/.espressif/tools/esp-rom-elfs/*)"
+export PATH="/c/Users/Mrk/.espressif/python_env/idf5.5_py3.14_env/Scripts:/c/Users/Mrk/.espressif/tools/cmake/3.30.2/bin:/c/Users/Mrk/.espressif/tools/ninja/1.12.1:/c/Users/Mrk/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20260121/xtensa-esp-elf/bin:$PATH"
+export IDF_COMPONENT_MANAGER=1
+python -c "import os,subprocess,sys; os.environ.pop('MSYSTEM',None); sys.exit(subprocess.call(['ninja','-C','build']))"
+```
+
+The component manifest must live in `main/idf_component.yml`; a manifest at the project root is not scanned.
+
+Design documents: `ORIGINAL_PROJECT_ANALYSIS.md`, `BOARD_PIN_MAPPING.md`, `HARDWARE_COMPATIBILITY.md`, `AUDIO_MIGRATION_PLAN.md`, `LVGL_ARCHITECTURE.md`, `DEVELOPMENT_ROADMAP.md`.
+
+---
+
 ## What this repo is
 
 **Status: working SIP phone on hardware (2026-11-10).** The ESP-IDF project boots on a XIAO ESP32-S3 Sense (COM8): 8 MB octal PSRAM, NVS configuration, Wi-Fi (`<your-ssid>`), a live PDM mic meter (~-44 dBFS ambient), the embedded web UI on port 80, and a working SIP UA. `components/sip_client` registers against a Yeastar UC120 at `192.168.5.142:5060` as extension `901` (digest with `qop=auth` or the legacy form), answers incoming INVITEs, and `rtp_audio` bridges G.711 PCMU to the I2S speaker and PDM mic using real UDP RTP (20 ms frames, 10-frame jitter buffer, send/receive counters). A call from a PC UAC verified `100/180/200 OK`, SDP, ACK, 241 RTP packets in 5 s, BYE, and board counters `sent 80, recv 75, lost 0`. Outgoing INVITEs are digest-authenticated and accepted by the UC120, and an outbound call was verified end-to-end with a PC UAC registered as second extension `902`: the board dialled the speed-dial number, the PC answered, and RTP flowed both ways (board `sent 188, recv 195`; PC `tx 615, rx 586`). Dialling `901` itself reaches PBX voicemail (`183`). The Phone tab speed-dial number is dialled by the ANSWER button via `phone.default_number`. The pre-compiled `esp_sip_service`/`esp_rtc` stack was removed because it re-read a stale 262-byte response forever after the first REGISTER, never sent the authenticated retry and tripped the task watchdog. The lab SSID is served by APs on both `192.168.5.x` and `192.168.7.x`; the phone roams, so SIP re-registers when its address changes (checked every 2 s).

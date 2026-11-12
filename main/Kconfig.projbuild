@@ -1,4 +1,4 @@
-menu "XIAO SIP Phone"
+menu "SIP Phone"
 
     config SIP_PHONE_WIFI_SSID
         string "First-boot Wi-Fi SSID"
@@ -16,5 +16,22 @@ menu "XIAO SIP Phone"
         help
             Password stored in plain text in NVS alongside the SSID. Leave empty
             for an open network. Enable NVS encryption before deploying.
+
+    config SIP_PHONE_LEGACY_XIAO_AUDIO
+        bool "Enable the XIAO PDM/I2S audio path"
+        default n
+        help
+            The original XIAO ESP32-S3 Sense wiring (PDM mic 41/42, I2S out
+            7/8/9). On the JC4827W543 GPIO8 is the GT911 SDA and GPIO41/42 are
+            reserved for the onboard speaker amplifier, so this must stay off
+            until the INMP441/speaker migration is implemented.
+
+    config SIP_PHONE_LEGACY_BUTTONS
+        bool "Enable the XIAO ANSWER/HANGUP buttons"
+        default n
+        help
+            The original buttons used GPIO3 (ANSWER) and GPIO2 (HANGUP). On
+            the JC4827W543 GPIO3 is the GT911 interrupt line, so the touch UI
+            replaces them.
 
 endmenu

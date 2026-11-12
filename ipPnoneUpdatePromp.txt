@@ -1,0 +1,769 @@
+# PROJECT EXTENSION: ESP32 SIP IP PHONE WITH LVGL TOUCHSCREEN
+
+## 1. Project Objective
+
+ปัจจุบันโปรเจกต์ต้นฉบับ ESP32 SIP IP Phone สามารถทำงานได้สมบูรณ์ในส่วนของ SIP Communication ได้แก่
+
+- SIP Registration
+- SIP Incoming Call
+- SIP Outgoing Call
+- Answer Call
+- Hangup Call
+- RTP Audio Streaming
+- Two-way Audio Communication
+- Wi-Fi Connection
+- Web Configuration
+- Serial Terminal Logging
+
+ให้พัฒนาต่อยอดโปรเจกต์เดิมเป็นรุ่นใหม่ที่มีหน้าจอสัมผัส โดยใช้ LVGL
+
+**ชื่อโปรเจกต์ใหม่ต้องลงท้ายด้วย `_screen`**
+
+ตัวอย่าง:
+
+```text
+Original Project:
+esp32_sip_phone/
+
+New Project:
+esp32_sip_phone_screen/
+```
+
+### ข้อกำหนดในการ Fork
+
+1. ตรวจสอบตำแหน่งโปรเจกต์ต้นฉบับ
+2. สำรองโครงสร้างและ Source Code ทั้งหมด
+3. สร้างโปรเจกต์ใหม่ใน Directory ระดับเดียวกับโปรเจกต์เดิม
+4. ห้ามแก้ไขหรือลบไฟล์ของโปรเจกต์ต้นฉบับ
+5. รักษา Git History และการตั้งค่า Repository ตามความเหมาะสม
+6. ตรวจสอบ Build ของโปรเจกต์ต้นฉบับก่อนเริ่ม
+7. เปรียบเทียบความสามารถของโปรเจกต์ใหม่กับโปรเจกต์ต้นฉบับ
+
+ห้ามเขียน SIP Stack ใหม่ และห้ามเปลี่ยน SIP/RTP Architecture โดยไม่มีความจำเป็น
+
+ให้ Reuse Source Code ของระบบ SIP เดิมให้มากที่สุด
+
+---
+
+## 2. New Hardware Specification
+
+เปลี่ยน Hardware จาก XIAO ESP32-S3 Sense เป็น:
+
+**Board: GUITION JC4827W543**
+
+รายละเอียด:
+
+- MCU: ESP32-S3
+- Flash: 4MB
+- PSRAM: 8MB (ตรวจสอบรุ่นย่อย)
+- Display: 4.3 Inch
+- Resolution: 480 x 272 Pixels
+- Display Driver: ST3401A (ตรวจสอบ Revision และ Datasheet)
+- Display Interface: ตรวจสอบจาก Schematic
+- Touchscreen: ตรวจสอบว่าเป็น Capacitive หรือ Resistive
+- Audio Amplifier: Onboard Speaker Amplifier
+- Speaker: Onboard Speaker Circuit
+- External Microphone: INMP441 I2S
+
+Framework:
+
+- ESP-IDF
+- FreeRTOS
+- LVGL
+- C/C++
+
+ให้เลือก LVGL Version ที่เข้ากันได้กับ ESP-IDF และ Display Driver ที่ใช้จริง
+
+---
+
+## 3. GPIO Configuration
+
+มี Expansion IO จากบอร์ดจำนวน 4 ชุด
+
+```text
+Header 1: GPIO46, GPIO9, GPIO14, GPIO5
+Header 2: GPIO6, GPIO7, GPIO15, GPIO16
+Header 3: GND, 3.3V, GPIO17, GPIO18
+Header 4: GND, 3.3V, GPIO17, GPIO18
+```
+
+หมายเหตุ: Header 3 และ Header 4 มี GPIO17/18 ซ้ำกันตามข้อมูลที่ได้รับ ให้ตรวจสอบ Schematic และตำแหน่ง Connector จริงก่อนใช้งาน
+
+### 3.1 External Microphone: INMP441
+
+ใช้ไมโครโฟน Digital I2S รุ่น INMP441
+
+Pin Configuration เบื้องต้น:
+
+```c
+#define MIC_I2S_BCLK  GPIO_NUM_6
+#define MIC_I2S_WS    GPIO_NUM_7
+#define MIC_I2S_SD    GPIO_NUM_15
+```
+
+การเชื่อมต่อ:
+
+| INMP441 | ESP32-S3 |
+|---|---|
+| VDD | 3.3V |
+| GND | GND |
+| SCK | GPIO6 |
+| WS | GPIO7 |
+| SD | GPIO15 |
+| L/R | GND |
+
+กำหนด L/R ลง GND เพื่อเลือก Left Channel
+
+ข้อกำหนด:
+- ใช้ I2S RX
+- รองรับ 16-bit และ 24-bit PCM
+- ตรวจสอบข้อมูลเสียงที่ส่งออกจาก INMP441
+- รองรับการปรับ Microphone Gain
+- รองรับ Full Duplex Audio
+- แยก Audio Capture Task จาก UI Task
+- ตรวจสอบ Audio Buffer และ DMA
+
+ต้องตรวจสอบ GPIO6, GPIO7 และ GPIO15 ว่าเป็นขาที่สามารถใช้งานได้จริงตาม Schematic ของบอร์ด Revision ที่กำลังพัฒนา
+
+ห้ามใช้ Pin Configuration ของบอร์ด XIAO ESP32-S3 Sense เดิมต่อไปโดยไม่ตรวจสอบ
+
+### 3.2 Onboard Speaker
+
+ใช้ภาคขยายเสียงที่ติดตั้งมาบนบอร์ด ไม่ต้องเพิ่ม Amplifier ภายนอก
+
+ให้ตรวจสอบวงจร Onboard Speaker และ I2S Audio Output ก่อนเขียน Driver
+
+หากบอร์ดใช้ NS4168 ให้ตรวจสอบ Pin Mapping จาก Schematic โดยมีข้อมูลอ้างอิงเบื้องต้นดังนี้:
+
+```c
+#define SPK_I2S_BCLK GPIO_NUM_42
+#define SPK_I2S_LRC  GPIO_NUM_2
+#define SPK_I2S_DOUT GPIO_NUM_41
+```
+
+ข้อกำหนด:
+- ใช้ I2S TX
+- ควบคุม Volume ได้
+- รองรับ PCM Audio
+- รองรับ G.711 PCMU/PCMA จาก SIP เดิม
+- ตรวจสอบ Sample Rate และ Bit Width
+- ตรวจสอบวงจรเปิด/ปิด Amplifier หากมี
+- ห้ามกำหนด Pin ซ้ำกับ Display หรือ Touch
+
+ต้องแยก Configuration ของ Microphone และ Speaker ออกจากกัน
+
+หาก I2S Peripheral รองรับการทำงานร่วมกันแบบ Full Duplex ให้ประเมินก่อนใช้งาน หากไม่เหมาะสมให้แยก RX/TX Peripheral ตามความสามารถของ ESP32-S3
+
+---
+
+## 4. Display Driver and LVGL
+
+พัฒนาระบบหน้าจอด้วย LVGL
+
+ข้อกำหนด:
+
+- Resolution 480x272
+- Landscape Orientation
+- Touchscreen Interface
+- Responsive Layout
+- Smooth UI Animation
+- Anti-aliased Font
+- Thai Font Support
+- Icon Support
+
+ต้องดำเนินการดังนี้:
+
+1. ตรวจสอบ Display Controller ของบอร์ดจริง
+2. ตรวจสอบ Datasheet และ Initialization Sequence
+3. ตรวจสอบ Display Bus Interface
+4. เลือก ESP-IDF Display Driver ที่รองรับ Controller
+5. ทดสอบ Display ก่อนเริ่มพัฒนา UI
+6. ทดสอบ Touchscreen
+7. เชื่อมต่อ Display Driver เข้ากับ LVGL
+8. สร้าง LVGL Display Flush Callback
+9. กำหนด Draw Buffer ให้เหมาะสม
+10. เปิดใช้งาน PSRAM เมื่อเหมาะสม
+
+ห้ามสมมติว่า ST3401A ใช้ Driver หรือ Initialization Sequence เดียวกับ NV3041A
+
+### LVGL Performance
+
+- ใช้ Partial Rendering หรือ Direct Rendering ตามความเหมาะสม
+- ใช้ DMA เมื่อ Driver รองรับ
+- กำหนด LVGL Tick อย่างถูกต้อง
+- กำหนด UI Task แยกจาก SIP/RTP Tasks
+- ห้ามเรียก LVGL API จากหลาย Task โดยไม่มี Mutex
+- ป้องกัน Display Flickering
+- ป้องกัน Memory Fragmentation
+- ลดการ Refresh หน้าจอโดยไม่จำเป็น
+
+ต้องทดสอบ UI ต่อเนื่องโดยไม่กระทบ Audio Streaming
+
+---
+
+## 5. User Interface Design
+
+ออกแบบหน้าจอให้เป็น IP Phone จริง มีรูปแบบ Modern SIP Desk Phone
+
+ใช้ Theme ที่ดูสะอาดตา อ่านง่าย และเหมาะกับจอ 4.3 นิ้ว
+
+กำหนดสีหลัก:
+- Background: Dark Navy หรือ Light Gray
+- Primary: Blue
+- Call Button: Green
+- Hangup Button: Red
+- Warning: Orange
+
+ใช้ Icon และ Typography ที่อ่านง่าย
+
+### 5.1 Main Screen / Home
+
+หน้าแรกต้องแสดงข้อมูลสำคัญทั้งหมด
+
+ส่วนบน:
+
+- Device Name
+- SIP Registration Status
+- Wi-Fi Status
+- Wi-Fi Signal
+- Current Time
+- Extension Number
+
+ส่วนกลาง:
+
+- SIP Account
+- Phone Status
+- Call Status
+- Caller ID
+- Call Duration
+
+ส่วนล่าง:
+
+- Dial Pad
+- Call Button
+- Contacts Button
+- Recent Calls Button
+- Settings Button
+
+ตัวอย่าง Layout:
+
+```text
++------------------------------------------------+
+| SIP PHONE       Ext: 101    WiFi    SIP ONLINE |
++------------------------------------------------+
+|                                                |
+|              ENTER PHONE NUMBER                |
+|                                                |
+|                0812345678                      |
+|                                                |
+|       1        2        3                      |
+|       4        5        6                      |
+|       7        8        9                      |
+|       *        0        #                      |
+|                                                |
+|         [ DELETE ]      [ CALL ]               |
+|                                                |
++------------------------------------------------+
+|  Contacts    History    Settings     Status    |
++------------------------------------------------+
+```
+
+ต้องออกแบบให้เหมาะกับ Resolution 480x272 จริง ไม่ใช้ Layout ที่เล็กจนกดลำบาก
+
+### 5.2 Dial Pad
+
+สร้างปุ่มตัวเลข 0-9, *, #
+
+ความสามารถ:
+
+- กดตัวเลขเพื่อป้อนหมายเลข
+- แสดงหมายเลขที่กำลังป้อน
+- ลบตัวเลขล่าสุด
+- ลบทั้งหมด
+- กดโทรออก
+- รองรับหมายเลข Extension
+- รองรับหมายเลขภายนอก
+- รองรับ DTMF ระหว่างสนทนา
+
+เมื่อกด Call:
+- ตรวจสอบ SIP Registration
+- ตรวจสอบหมายเลข
+- ส่งหมายเลขให้ SIP Module เดิม
+- เปลี่ยนหน้าไปยัง Call Screen
+
+ห้ามสร้าง SIP INVITE ซ้ำใน UI Module ให้เรียก API ของ SIP Client เดิมเท่านั้น
+
+### 5.3 Incoming Call Screen
+
+เมื่อมีสายเข้า ให้แสดงหน้าจอ Incoming Call
+
+ข้อมูล:
+- Incoming Call
+- Caller ID
+- Caller Number
+- Call Status
+
+ปุ่ม:
+- ANSWER
+- REJECT
+
+เมื่อกด ANSWER ให้เรียก SIP Answer API เดิม
+
+เมื่อกด REJECT ให้เรียก SIP Reject API เดิม
+
+รองรับเสียง Ring Tone ผ่าน Speaker
+
+### 5.4 Active Call Screen
+
+เมื่อโทรติดแล้ว ให้เปลี่ยนไปยังหน้าสนทนา
+
+แสดง:
+- Remote Number
+- Caller Name (ถ้ามี)
+- Call Duration
+- Connection Status
+
+ปุ่มควบคุม:
+- Mute Microphone
+- Speaker Volume
+- DTMF Keypad
+- Hangup
+
+Mute ต้องปิดเฉพาะ Microphone Capture หรือส่ง Silence ตามความเหมาะสม โดยไม่หยุด RTP Receive
+
+ปุ่ม Hangup ต้องเรียก SIP BYE ผ่าน SIP Module เดิม
+
+เมื่อวางสายให้กลับไป Home Screen
+
+### 5.5 Contacts
+
+สร้างระบบสมุดรายชื่อ
+
+ข้อมูล:
+- Contact Name
+- Phone Number
+- SIP Extension
+- Contact Type
+
+ความสามารถ:
+- Add Contact
+- Edit Contact
+- Delete Contact
+- Search Contact
+- Select Contact to Call
+
+เก็บข้อมูลใน NVS หรือ Storage ที่เหมาะสม โดยรองรับข้อมูลหลายรายการและไม่ทำให้ NVS เขียนข้อมูลถี่เกินไป
+
+### 5.6 Call History
+
+แสดงประวัติ:
+- Incoming Calls
+- Outgoing Calls
+- Missed Calls
+
+ข้อมูล:
+- Phone Number
+- Contact Name
+- Call Date
+- Call Time
+- Duration
+- Call Result
+
+สามารถเลือกหมายเลขเพื่อโทรกลับได้
+
+---
+
+## 6. Settings Menu
+
+สร้างหน้า Settings บนหน้าจอ LVGL
+
+### 6.1 SIP Settings
+
+แสดงและแก้ไข:
+
+- SIP Server
+- SIP Port
+- SIP Username
+- SIP Password
+- Authentication ID
+- Display Name
+- Extension
+- Transport Protocol
+- Registration Expiration
+- Codec Priority
+
+ปุ่ม:
+- Save
+- Register
+- Unregister
+- Test Connection
+
+ต้องใช้ Config Manager เดิมร่วมกับ Web Configuration
+
+ห้ามสร้าง Configuration Storage สองชุดที่ไม่ตรงกัน
+
+### 6.2 Wi-Fi Settings
+
+แสดง:
+- Wi-Fi Status
+- Connected SSID
+- IP Address
+- Gateway
+- Signal Strength
+
+ตั้งค่า:
+- Scan Wi-Fi
+- Select SSID
+- Password
+- Connect
+- Disconnect
+- DHCP / Static IP
+
+เมื่อเปลี่ยน Wi-Fi ต้องไม่ทำให้ระบบ UI ค้าง
+
+### 6.3 Audio Settings
+
+ตั้งค่า:
+- Microphone Gain
+- Speaker Volume
+- Microphone Mute
+- Audio Codec
+- Noise Reduction
+- AEC (หากรองรับ)
+- Audio Test
+
+มีปุ่มทดสอบ Microphone และ Speaker แยกกัน
+
+### 6.4 System Settings
+
+แสดง:
+- Firmware Version
+- Board Model
+- CPU Frequency
+- Free Heap
+- PSRAM Usage
+- Wi-Fi IP
+- Uptime
+
+คำสั่ง:
+- Restart
+- Factory Reset
+- Firmware Information
+
+---
+
+## 7. Touchscreen Support
+
+ตรวจสอบ Touch Controller จากบอร์ดจริง
+
+ต้องตรวจสอบว่าเป็น:
+- Capacitive Touch เช่น GT911
+- หรือ Resistive Touch เช่น XPT2046
+
+ห้ามสมมติว่า Touch Controller ของทุกรุ่นย่อยเหมือนกัน
+
+ข้อกำหนด:
+- รองรับ Touch Coordinate
+- รองรับ Touch Calibration หากจำเป็น
+- รองรับ Screen Rotation
+- รองรับ LVGL Input Device
+- ป้องกันการกดซ้ำโดยไม่ตั้งใจ
+- รองรับ Long Press
+- ปุ่มต้องมีขนาดเหมาะสมสำหรับนิ้วมือ
+
+หากใช้ GT911 ให้ตรวจสอบ I2C, INT และ RST Pin ตาม Schematic
+
+หากใช้ XPT2046 ให้ตรวจสอบ SPI Bus และ Chip Select
+
+---
+
+## 8. System Architecture
+
+ให้แยก Module ดังนี้:
+
+```text
+esp32_sip_phone_screen/
+│
+├── main/
+│
+├── components/
+│   ├── sip_client/
+│   ├── rtp_audio/
+│   ├── audio_driver/
+│   ├── phone_control/
+│   ├── wifi_manager/
+│   ├── web_server/
+│   ├── config_manager/
+│   │
+│   ├── display_driver/
+│   ├── touch_driver/
+│   ├── lvgl_port/
+│   ├── ui/
+│   │   ├── ui_manager.c
+│   │   ├── ui_home.c
+│   │   ├── ui_dialpad.c
+│   │   ├── ui_incoming.c
+│   │   ├── ui_call.c
+│   │   ├── ui_contacts.c
+│   │   ├── ui_history.c
+│   │   ├── ui_sip_settings.c
+│   │   ├── ui_wifi_settings.c
+│   │   └── ui_audio_settings.c
+│   │
+│   └── storage/
+│       ├── contacts.c
+│       └── call_history.c
+│
+├── web/
+│
+├── assets/
+│   ├── fonts/
+│   └── icons/
+│
+├── sdkconfig.defaults
+├── partitions.csv
+├── CMakeLists.txt
+└── README.md
+```
+
+สามารถปรับโครงสร้างให้เหมาะกับ Library ที่เลือกได้ แต่ต้องรักษาการแยก Module
+
+### 8.1 Inter-module Communication
+
+UI ต้องไม่เรียก SIP Stack โดยตรง
+
+ให้สร้าง Application Event หรือ API Layer เป็นตัวกลาง
+
+ตัวอย่าง Event:
+
+```c
+typedef enum {
+    PHONE_EVENT_IDLE,
+    PHONE_EVENT_REGISTERED,
+    PHONE_EVENT_UNREGISTERED,
+    PHONE_EVENT_INCOMING_CALL,
+    PHONE_EVENT_OUTGOING_CALL,
+    PHONE_EVENT_RINGING,
+    PHONE_EVENT_CALL_CONNECTED,
+    PHONE_EVENT_CALL_ENDED,
+    PHONE_EVENT_CALL_FAILED,
+    PHONE_EVENT_WIFI_CONNECTED,
+    PHONE_EVENT_WIFI_DISCONNECTED
+} phone_event_t;
+```
+
+เมื่อ SIP State เปลี่ยน ต้องแจ้ง UI ผ่าน Queue/Event System
+
+UI จะรับ Event แล้วอัปเดตหน้าจอ
+
+ห้ามให้ SIP Task เรียก LVGL API โดยตรง
+
+ห้ามให้ LVGL Task ทำงานหนักจนขัดขวาง RTP Audio
+
+---
+
+## 9. Preserve Existing Web Configuration
+
+โปรเจกต์ใหม่ต้องยังคงมี Web Configuration เหมือนโปรเจกต์ต้นฉบับ
+
+ความสามารถ:
+- Web Dashboard
+- SIP Settings
+- Wi-Fi Settings
+- Audio Settings
+- System Status
+- Reboot
+- OTA (ถ้ารองรับ)
+
+การเปลี่ยนค่าจากหน้าจอ LVGL ต้องสะท้อนมายัง Web Configuration และในทางกลับกัน
+
+ให้ทั้งสอง Interface ใช้ Config Manager ตัวเดียวกัน
+
+ข้อมูลสถานะ SIP และ Wi-Fi ต้องใช้ State Manager ตัวเดียวกัน
+
+---
+
+## 10. Serial Terminal
+
+คงระบบ Terminal Logging เดิมไว้
+
+เพิ่ม Log ของ Display และ LVGL:
+
+```text
+[DISPLAY] Initializing Display...
+[DISPLAY] Controller: ST3401A
+[DISPLAY] Resolution: 480x272
+[DISPLAY] Initialization Complete
+
+[TOUCH] Initializing Touch Controller...
+[TOUCH] Touch Ready
+
+[LVGL] Initializing LVGL...
+[LVGL] UI Ready
+
+[AUDIO] Initializing INMP441...
+[AUDIO] Microphone Ready
+
+[AUDIO] Initializing Onboard Speaker...
+[AUDIO] Speaker Ready
+
+[PHONE] SIP Registration Successful
+[PHONE] Ready
+```
+
+เพิ่ม Log:
+- LVGL Memory
+- Display Refresh
+- Touch Coordinates
+- Audio Input Status
+- Audio Output Status
+- SIP State
+- Wi-Fi State
+- Free Heap
+- PSRAM
+- Task Watchdog
+
+ห้าม Log Password หรือ SIP Credentials
+
+---
+
+## 11. Development Roadmap
+
+พัฒนาตามลำดับ ห้ามทำทุกอย่างพร้อมกัน
+
+### Phase 1: Fork and Analyze
+
+- ตรวจสอบโปรเจกต์ต้นฉบับ
+- สร้าง `_screen`
+- ตรวจสอบ Dependencies
+- ตรวจสอบ GPIO Conflict
+- ตรวจสอบ Display Controller
+- ตรวจสอบ Touch Controller
+- ตรวจสอบ Audio Hardware
+- จัดทำ Hardware Configuration
+
+ต้อง Build ผ่านโดยยังไม่เปลี่ยน SIP Logic
+
+### Phase 2: Display and Touch
+
+- Initialize Display
+- ทดสอบแสดงข้อความ
+- ทดสอบสีและภาพ
+- Initialize LVGL
+- Initialize Touch
+- ทดสอบ Touch Coordinates
+- ทดสอบ UI Demo
+
+### Phase 3: Audio Migration
+
+- ปิด Audio Driver ของ XIAO ที่ไม่เกี่ยวข้อง
+- เพิ่ม INMP441 Driver
+- เพิ่ม Onboard Speaker Driver
+- ทดสอบ Microphone
+- ทดสอบ Speaker
+- ทดสอบ Full Duplex
+- ตรวจสอบ Audio Quality
+
+### Phase 4: SIP Integration
+
+นำ SIP/RTP Module เดิมมาเชื่อมต่อ
+
+- ทดสอบ Register
+- ทดสอบโทรออก
+- ทดสอบรับสาย
+- ทดสอบวางสาย
+- ทดสอบเสียงสองทาง
+- ทดสอบ DTMF
+
+ต้องเปรียบเทียบกับโปรเจกต์ต้นฉบับเพื่อยืนยันว่าไม่มีความสามารถเดิมสูญหาย
+
+### Phase 5: LVGL Phone UI
+
+- Home Screen
+- Dial Pad
+- Incoming Call
+- Active Call
+- Contacts
+- Call History
+- SIP Settings
+- Wi-Fi Settings
+- Audio Settings
+
+### Phase 6: Integration
+
+- เชื่อม UI กับ SIP State
+- เชื่อม UI กับ Wi-Fi State
+- เชื่อม UI กับ Audio State
+- เชื่อม Web Configuration
+- ทดสอบการใช้งานจริง
+
+### Phase 7: Stability Testing
+
+- โทรออกต่อเนื่อง
+- รับสายต่อเนื่อง
+- โทรเข้าและออกหลายรอบ
+- ทดสอบ Mute
+- ทดสอบ DTMF
+- ทดสอบ Touch ขณะสนทนา
+- ทดสอบ Wi-Fi หลุด
+- ทดสอบ Reconnect
+- ทดสอบ UI พร้อม RTP Audio
+- ทดสอบ Memory Leak
+- ทดสอบ Restart
+
+### Phase 8: Final Release
+
+ส่งมอบ:
+1. Source Code โปรเจกต์ใหม่
+2. Firmware Binary
+3. ESP-IDF Build Configuration
+4. Hardware Pinout
+5. Wiring Diagram INMP441
+6. LVGL UI Source
+7. README.md
+8. Build Instructions
+9. Flash Instructions
+10. Testing Report
+
+---
+
+## 12. Mandatory Development Rules
+
+1. ห้ามแก้ไขโปรเจกต์ต้นฉบับ
+2. ห้ามเขียน SIP Stack ใหม่
+3. ห้ามทำให้ระบบโทรเข้าและโทรออกเดิมเสีย
+4. ต้องตรวจสอบ Hardware Revision ก่อนเลือก Display Driver
+5. ต้องตรวจสอบ Touch Controller ก่อนเลือก Touch Library
+6. ต้องตรวจสอบ GPIO ทุกขาก่อนนำมาใช้
+7. ต้องทดสอบ Audio Driver แยกจาก SIP
+8. ต้อง Build ผ่านทุก Phase
+9. ต้องใช้ LVGL จริง ไม่ใช่ Web UI แทนหน้าจอ
+10. ต้องแยก UI Task จาก SIP/RTP Task
+11. ห้ามให้ UI Refresh ทำให้เสียงสนทนาสะดุด
+12. ต้องรักษา Web Configuration เดิม
+13. ต้องรักษา Serial Logging เดิม
+14. ต้องไม่ Mock การโทรเพื่ออ้างว่าระบบสมบูรณ์
+15. หากทดสอบฮาร์ดแวร์จริงไม่ได้ ต้องระบุให้ชัดเจน
+16. ต้องมี Git Commit แยกตาม Phase
+17. ทุกการเปลี่ยนแปลงต้องมีผล Build/Test ประกอบ
+
+## 13. First Action
+
+เริ่มต้นด้วยการตรวจสอบโปรเจกต์เดิมและสร้างโปรเจกต์ `_screen` โดยอัตโนมัติ
+
+ก่อนเขียนโค้ดให้จัดทำเอกสาร:
+
+- ORIGINAL_PROJECT_ANALYSIS.md
+- BOARD_PIN_MAPPING.md
+- HARDWARE_COMPATIBILITY.md
+- AUDIO_MIGRATION_PLAN.md
+- LVGL_ARCHITECTURE.md
+- DEVELOPMENT_ROADMAP.md
+
+จากนั้นดำเนินการ Phase 1 และ Phase 2
+
+ห้ามรอการยืนยันในทุกขั้นตอนย่อย ให้ตัดสินใจทางเทคนิคตามข้อมูลที่ตรวจสอบได้ และบันทึกเหตุผลของการตัดสินใจ
+
+**FINAL GOAL:**
+
+พัฒนาโปรเจกต์ ESP32 SIP IP Phone รุ่น Touchscreen ให้กลายเป็น IP Phone ที่มีหน้าจอสัมผัส 4.3 นิ้ว ใช้งาน SIP โทรเข้า โทรออก รับสาย วางสาย สนทนาสองทางผ่าน INMP441 และ Onboard Speaker ได้จริง พร้อม LVGL UI, Contacts, Call History, SIP Settings, Wi-Fi Settings, Web Configuration และ Serial Debugging โดยรักษาความสามารถทั้งหมดของโปรเจกต์ต้นฉบับ

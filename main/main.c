@@ -19,9 +19,13 @@
 #include "app_state.h"
 #include "audio_driver.h"
 #include "config_manager.h"
+#include "display_driver.h"
+#include "lvgl_port.h"
 #include "phone_control.h"
 #include "rtp_client.h"
 #include "sip_client.h"
+#include "touch_driver.h"
+#include "ui.h"
 #include "web_server.h"
 #include "wifi_manager.h"
 
@@ -143,12 +147,37 @@ void app_main(void)
                  cfg->sip.server, (unsigned)cfg->sip.port, cfg->sip.extension);
     }
 
+    /* Display first: it is the only way to see boot progress on this board. */
+    esp_err_t display_err = display_driver_init();
+    log_init_result("display_driver", display_err);
+    esp_err_t touch_err = touch_driver_init();
+    log_init_result("touch_driver", touch_err);
+    if (display_err == ESP_OK) {
+        esp_err_t lvgl_err = lvgl_port_init(display_driver_panel());
+        log_init_result("lvgl_port", lvgl_err);
+        if (lvgl_err == ESP_OK) {
+            esp_err_t ui_err = ESP_FAIL;
+            if (lvgl_port_lock(1000)) {
+                ui_err = ui_init();
+                lvgl_port_unlock();
+            }
+            log_init_result("ui", ui_err);
+        }
+    }
+    if (touch_err != ESP_OK) {
+        ESP_LOGW(TAG, "[TOUCH] Touch input unavailable, UI runs read-only");
+    }
+
     esp_err_t wifi_err = wifi_manager_init();
     log_init_result("wifi_manager", wifi_err);
     if (wifi_err == ESP_OK) {
         connect_wifi_at_boot();
     }
 
+    /* The XIAO PDM/I2S wiring conflicts with this board (GPIO8 is touch SDA,
+     * GPIO41/42 move to the speaker amp), so it is off until the Phase 3
+     * INMP441/onboard-speaker driver replaces it. */
+#if CONFIG_SIP_PHONE_LEGACY_XIAO_AUDIO
     esp_err_t audio_err = audio_driver_init();
     log_init_result("audio_driver", audio_err);
     if (audio_err == ESP_OK) {
@@ -161,6 +190,9 @@ void app_main(void)
             ESP_LOGE(TAG, "[AUDIO] Microphone start failed: %s", esp_err_to_name(in_err));
         }
     }
+#else
+    ESP_LOGW(TAG, "[AUDIO] Legacy PDM/I2S path disabled; audio migration pending (Phase 3)");
+#endif
     log_init_result("sip_client", sip_client_init());
     log_init_result("rtp_audio", rtp_client_init());
     log_init_result("phone_control", phone_control_init());

@@ -9,5 +9,9 @@ idf_component_register(
         rtp_audio
         phone_control
         web_server
+        display_driver
+        touch_driver
+        lvgl_port
+        ui
         esp_timer
 )
