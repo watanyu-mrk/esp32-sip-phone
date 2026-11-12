@@ -315,6 +315,72 @@ esp_err_t wifi_manager_init(void)
     return ESP_OK;
 }
 
+#define WIFI_SCAN_MAX_RECORDS 24
+
+static wifi_ap_record_t s_scan_records[WIFI_SCAN_MAX_RECORDS];
+
+int wifi_manager_scan(wifi_scan_ap_t *out, size_t max)
+{
+    if (!s_initialized || out == NULL || max == 0) {
+        return -1;
+    }
+
+    wifi_scan_config_t scan_cfg = {0};
+    esp_err_t err = esp_wifi_scan_start(&scan_cfg, true);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "[WIFI] Scan start failed: %s", esp_err_to_name(err));
+        return -1;
+    }
+
+    uint16_t count = 0;
+    if (esp_wifi_scan_get_ap_num(&count) != ESP_OK || count == 0) {
+        return 0;
+    }
+    if (count > WIFI_SCAN_MAX_RECORDS) {
+        count = WIFI_SCAN_MAX_RECORDS;
+    }
+    if (esp_wifi_scan_get_ap_records(&count, s_scan_records) != ESP_OK) {
+        return -1;
+    }
+
+    int found = 0;
+    for (uint16_t i = 0; i < count && (size_t)found < max; i++) {
+        if (s_scan_records[i].ssid[0] == '\0') {
+            continue;
+        }
+        bool duplicate = false;
+        for (int j = 0; j < found; j++) {
+            if (strcmp(out[j].ssid, (const char *)s_scan_records[i].ssid) == 0) {
+                duplicate = true;
+                break;
+            }
+        }
+        if (duplicate) {
+            continue;
+        }
+        strncpy(out[found].ssid, (const char *)s_scan_records[i].ssid,
+                sizeof(out[found].ssid) - 1);
+        out[found].ssid[sizeof(out[found].ssid) - 1] = '\0';
+        out[found].rssi = s_scan_records[i].rssi;
+        out[found].secure = s_scan_records[i].authmode != WIFI_AUTH_OPEN;
+        found++;
+    }
+
+    /* Strongest first, like a phone's Wi-Fi picker. */
+    for (int i = 1; i < found; i++) {
+        wifi_scan_ap_t key = out[i];
+        int j = i - 1;
+        while (j >= 0 && out[j].rssi < key.rssi) {
+            out[j + 1] = out[j];
+            j--;
+        }
+        out[j + 1] = key;
+    }
+
+    ESP_LOGI(TAG, "[WIFI] Scan found %d network(s)", found);
+    return found;
+}
+
 esp_err_t wifi_manager_start_fallback_ap(void)
 {
     if (!s_initialized) {

@@ -43,6 +43,19 @@ int8_t wifi_manager_get_rssi(void);
 /* Writes the current IPv4 address into buf as a string. */
 esp_err_t wifi_manager_get_ip(char *buf, size_t buf_len);
 
+#define WIFI_MANAGER_SCAN_MAX 12
+
+typedef struct {
+    char ssid[33];
+    int8_t rssi;
+    bool secure;
+} wifi_scan_ap_t;
+
+/* Blocking scan (2-4 s) that leaves the driver running. Fills up to max
+ * entries, strongest first, duplicates removed; returns the count or a
+ * negative value when the scan could not run. */
+int wifi_manager_scan(wifi_scan_ap_t *out, size_t max);
+
 /* Switches to WIFI_MODE_APSTA and starts the open setup AP. Idempotent.
  * Restarts the Wi-Fi driver, so only call when the station is not carrying a
  * call. Normally invoked automatically when the station has no usable link. */

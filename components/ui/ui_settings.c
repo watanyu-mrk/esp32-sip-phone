@@ -67,6 +67,8 @@ static lv_obj_t *s_sip_user;
 static lv_obj_t *s_sip_pass;
 static lv_obj_t *s_wifi_ssid;
 static lv_obj_t *s_wifi_pass;
+static lv_obj_t *s_scan_list;
+static char s_scan_ssid[WIFI_MANAGER_SCAN_MAX][33];
 
 static int8_t s_gain_db;
 
@@ -210,20 +212,29 @@ static lv_obj_t *make_keyboard(lv_obj_t *page)
     return kb;
 }
 
+static void show_keyboard(lv_obj_t *kb, lv_obj_t *ta, lv_keyboard_mode_t mode)
+{
+    if (kb == NULL || ta == NULL) {
+        return;
+    }
+    lv_keyboard_set_mode(kb, mode);
+    lv_keyboard_set_textarea(kb, ta);
+    lv_obj_clear_flag(kb, LV_OBJ_FLAG_HIDDEN);
+    /* A page rebuild or a dialog may have been added later; keep the keyboard
+     * above the fields it edits. */
+    lv_obj_move_foreground(kb);
+}
+
 static void ta_text_cb(lv_event_t *event)
 {
-    lv_obj_t *kb = lv_event_get_user_data(event);
-    lv_keyboard_set_mode(kb, LV_KEYBOARD_MODE_TEXT_LOWER);
-    lv_keyboard_set_textarea(kb, lv_event_get_target(event));
-    lv_obj_clear_flag(kb, LV_OBJ_FLAG_HIDDEN);
+    show_keyboard(lv_event_get_user_data(event), lv_event_get_target(event),
+                  LV_KEYBOARD_MODE_TEXT_LOWER);
 }
 
 static void ta_number_cb(lv_event_t *event)
 {
-    lv_obj_t *kb = lv_event_get_user_data(event);
-    lv_keyboard_set_mode(kb, LV_KEYBOARD_MODE_NUMBER);
-    lv_keyboard_set_textarea(kb, lv_event_get_target(event));
-    lv_obj_clear_flag(kb, LV_OBJ_FLAG_HIDDEN);
+    show_keyboard(lv_event_get_user_data(event), lv_event_get_target(event),
+                  LV_KEYBOARD_MODE_NUMBER);
 }
 
 /* ------------------------------------------------------------- navigation */
@@ -564,13 +575,75 @@ static void build_sip_page(void)
     lv_obj_set_size(s_sip_status, 256, 60);
     lv_label_set_text(s_sip_status, "Changes apply after reboot.");
 
-    /* One keyboard per text-entry page, hidden until a field is tapped. */
+    /* One keyboard per text-entry page, hidden until a field is tapped. Both
+     * FOCUSED and CLICKED are wired: a textarea consumes the click to place
+     * its cursor, so CLICKED alone does not always arrive, while FOCUSED does
+     * not repeat when the same field is tapped twice after closing the board. */
     lv_obj_t *kb = make_keyboard(s_page_sip);
-    lv_obj_add_event_cb(s_sip_server, ta_text_cb, LV_EVENT_CLICKED, kb);
-    lv_obj_add_event_cb(s_sip_port, ta_number_cb, LV_EVENT_CLICKED, kb);
-    lv_obj_add_event_cb(s_sip_ext, ta_number_cb, LV_EVENT_CLICKED, kb);
-    lv_obj_add_event_cb(s_sip_user, ta_text_cb, LV_EVENT_CLICKED, kb);
-    lv_obj_add_event_cb(s_sip_pass, ta_text_cb, LV_EVENT_CLICKED, kb);
+    lv_obj_t *fields[] = {s_sip_server, s_sip_port, s_sip_ext, s_sip_user, s_sip_pass};
+    for (size_t i = 0; i < sizeof(fields) / sizeof(fields[0]); i++) {
+        lv_event_cb_t cb = (fields[i] == s_sip_port || fields[i] == s_sip_ext) ? ta_number_cb
+                                                                               : ta_text_cb;
+        lv_obj_add_event_cb(fields[i], cb, LV_EVENT_CLICKED, kb);
+        lv_obj_add_event_cb(fields[i], cb, LV_EVENT_FOCUSED, kb);
+    }
+}
+
+static void wifi_pick_cb(lv_event_t *event)
+{
+    const char *ssid = lv_event_get_user_data(event);
+    if (ssid == NULL) {
+        return;
+    }
+    lv_textarea_set_text(s_wifi_ssid, ssid);
+    lv_label_set_text_fmt(s_wifi_status, "Selected %s", ssid);
+    lv_obj_set_style_text_color(s_wifi_status, lv_color_hex(COL_DIM), 0);
+}
+
+static void wifi_scan_cb(lv_event_t *event)
+{
+    (void)event;
+
+    /* The scan blocks for a few seconds; paint the notice first. */
+    lv_obj_set_style_text_color(s_wifi_status, lv_color_hex(COL_WARN), 0);
+    lv_label_set_text(s_wifi_status, "Scanning...");
+    lv_refr_now(NULL);
+
+    wifi_scan_ap_t aps[WIFI_MANAGER_SCAN_MAX];
+    int found = wifi_manager_scan(aps, WIFI_MANAGER_SCAN_MAX);
+
+    lv_obj_clean(s_scan_list);
+    if (found <= 0) {
+        lv_obj_set_style_text_color(s_wifi_status, lv_color_hex(COL_WARN), 0);
+        lv_label_set_text(s_wifi_status,
+                          (found == 0) ? "No networks found" : "Scan failed");
+        return;
+    }
+
+    for (int i = 0; i < found; i++) {
+        snprintf(s_scan_ssid[i], sizeof(s_scan_ssid[i]), "%s", aps[i].ssid);
+
+        lv_obj_t *row = lv_button_create(s_scan_list);
+        lv_obj_remove_style_all(row);
+        lv_obj_set_size(row, 240, 34);
+        lv_obj_add_flag(row, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_set_style_bg_color(row, lv_color_hex(COL_CARD), 0);
+        lv_obj_set_style_bg_opa(row, LV_OPA_COVER, 0);
+        lv_obj_set_style_bg_color(row, lv_color_hex(COL_CARD_HI), LV_STATE_PRESSED);
+        lv_obj_set_style_radius(row, 6, 0);
+
+        lv_obj_t *label = lv_label_create(row);
+        lv_label_set_text_fmt(label, "%s  %d dBm%s", aps[i].ssid, (int)aps[i].rssi,
+                              aps[i].secure ? " *" : "");
+        lv_obj_set_style_text_font(label, &lv_font_montserrat_14, 0);
+        lv_obj_set_style_text_color(label, lv_color_hex(COL_TEXT), 0);
+        lv_obj_align(label, LV_ALIGN_LEFT_MID, 8, 0);
+
+        lv_obj_add_event_cb(row, wifi_pick_cb, LV_EVENT_CLICKED, s_scan_ssid[i]);
+    }
+
+    lv_obj_set_style_text_color(s_wifi_status, lv_color_hex(COL_DIM), 0);
+    lv_label_set_text_fmt(s_wifi_status, "%d networks - tap to pick", found);
 }
 
 static void build_wifi_page(void)
@@ -580,25 +653,39 @@ static void build_wifi_page(void)
     add_header(s_page_wifi, "Wi-Fi", back_hub_cb);
 
     make_label(s_page_wifi, 8, 32, &lv_font_montserrat_14, COL_DIM, "SSID");
-    s_wifi_ssid = make_textarea(s_page_wifi, 8, 48, 256, 30, cfg ? cfg->wifi.ssid : "",
+    s_wifi_ssid = make_textarea(s_page_wifi, 8, 48, 190, 30, cfg ? cfg->wifi.ssid : "",
                                 CFG_SSID_LEN - 1, false, ta_text_cb, NULL);
+    make_button(s_page_wifi, 204, 48, 60, 30, "Scan", COL_PRIMARY, 0x1F4FB0,
+                &lv_font_montserrat_14, wifi_scan_cb, NULL);
 
     make_label(s_page_wifi, 8, 84, &lv_font_montserrat_14, COL_DIM, "Password (blank = keep)");
     s_wifi_pass = make_textarea(s_page_wifi, 8, 100, 256, 30, "", CFG_SECRET_LEN - 1, true,
                                 ta_text_cb, NULL);
 
-    make_button(s_page_wifi, 8, 140, 140, 36, "Connect", COL_GREEN, 0x1E8449,
+    make_button(s_page_wifi, 8, 138, 130, 34, "Connect", COL_GREEN, 0x1E8449,
                 &lv_font_montserrat_16, wifi_connect_cb, NULL);
 
-    s_wifi_status = make_label(s_page_wifi, 8, 186, &lv_font_montserrat_14, COL_DIM, "");
-    lv_obj_set_size(s_wifi_status, 256, 44);
+    s_wifi_status = make_label(s_page_wifi, 8, 180, &lv_font_montserrat_14, COL_DIM, "");
+    lv_obj_set_size(s_wifi_status, 256, 30);
 
-    make_label(s_page_wifi, 8, 240, &lv_font_montserrat_14, COL_DIM,
-               "Saves and reconnects now.\nIf it fails, the setup AP returns.");
+    /* Scan results: a scrollable column, one button per network. */
+    s_scan_list = lv_obj_create(s_page_wifi);
+    lv_obj_remove_style_all(s_scan_list);
+    lv_obj_set_pos(s_scan_list, 8, 214);
+    lv_obj_set_size(s_scan_list, 256, 176);
+    lv_obj_set_style_pad_all(s_scan_list, 0, 0);
+    lv_obj_set_style_pad_row(s_scan_list, 4, 0);
+    lv_obj_set_flex_flow(s_scan_list, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_scroll_dir(s_scan_list, LV_DIR_VER);
+
+    make_label(s_page_wifi, 8, 398, &lv_font_montserrat_14, COL_DIM, "* = secured network");
 
     lv_obj_t *kb = make_keyboard(s_page_wifi);
-    lv_obj_add_event_cb(s_wifi_ssid, ta_text_cb, LV_EVENT_CLICKED, kb);
-    lv_obj_add_event_cb(s_wifi_pass, ta_text_cb, LV_EVENT_CLICKED, kb);
+    lv_obj_t *fields[] = {s_wifi_ssid, s_wifi_pass};
+    for (size_t i = 0; i < sizeof(fields) / sizeof(fields[0]); i++) {
+        lv_obj_add_event_cb(fields[i], ta_text_cb, LV_EVENT_CLICKED, kb);
+        lv_obj_add_event_cb(fields[i], ta_text_cb, LV_EVENT_FOCUSED, kb);
+    }
 }
 
 static void build_status_page(void)
