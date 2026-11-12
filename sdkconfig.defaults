@@ -34,7 +34,9 @@ CONFIG_SIP_PHONE_LEGACY_BUTTONS=n
 # LVGL 9.3 (managed component). RGB565 into the NV3041A QSPI panel.
 CONFIG_LV_CONF_SKIP=y
 CONFIG_LV_COLOR_DEPTH_16=y
-CONFIG_LV_MEM_SIZE_KILOBYTES=48
+# The settings pages plus the 40-key text editor need more than the old
+# 48 KB pool; exhausting it makes LVGL spin in its assert handler.
+CONFIG_LV_MEM_SIZE_KILOBYTES=96
 CONFIG_LV_DEF_REFR_PERIOD=30
 CONFIG_LV_FONT_MONTSERRAT_14=y
 CONFIG_LV_FONT_MONTSERRAT_16=y
