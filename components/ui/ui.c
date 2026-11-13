@@ -14,6 +14,7 @@
 #include "lvgl.h"
 
 #include "config_manager.h"
+#include "ringtone.h"
 #include "phone_control.h"
 #include "sip_client.h"
 #include "ui.h"
@@ -133,6 +134,19 @@ static void dial_key_cb(lv_event_t *event)
     size_t len = strlen(s_number);
 
     s_notice_until = 0;
+
+    /* Feedback only while dialling. DTMF inside a call belongs on the RTP
+     * path; a local tone there would fight the call audio for the speaker. */
+    if (sip_client_get_call_state() == SIP_CALL_IDLE) {
+        const phone_config_t *cfg = config_manager_get();
+        if (cfg != NULL && cfg->keytone.key_volume > 0) {
+            esp_err_t err = ringtone_play_key(key[0], cfg->keytone.key_volume);
+            if (err != ESP_OK) {
+                ESP_LOGD(TAG, "Key tone skipped: %s", esp_err_to_name(err));
+            }
+        }
+    }
+
     if (len + strlen(key) < sizeof(s_number)) {
         memcpy(&s_number[len], key, strlen(key) + 1);
         render_number();

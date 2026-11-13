@@ -15,6 +15,8 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "mbedtls/base64.h"
+#include "phone_control.h"
+#include "ringtone.h"
 #include "sip_client.h"
 #include "wifi_manager.h"
 
@@ -281,6 +283,9 @@ static esp_err_t api_config_get(httpd_req_t *req)
     cJSON_AddNumberToObject(phone, "auto_answer_delay_ms", cfg->phone.auto_answer_delay_ms);
     cJSON_AddNumberToObject(phone, "ring_duration_s", cfg->phone.ring_duration_s);
     cJSON_AddNumberToObject(phone, "call_timeout_s", cfg->phone.call_timeout_s);
+    cJSON_AddNumberToObject(phone, "ringtone", cfg->ring.ringtone);
+    cJSON_AddNumberToObject(phone, "ring_volume", cfg->ring.ring_volume);
+    cJSON_AddNumberToObject(phone, "key_volume", cfg->keytone.key_volume);
     cJSON_AddStringToObject(phone, "dtmf_mode",
                             (cfg->sip.dtmf_mode == DTMF_MODE_SIP_INFO)    ? "info"
                             : (cfg->sip.dtmf_mode == DTMF_MODE_INBAND)    ? "inband"
@@ -543,6 +548,12 @@ static esp_err_t api_config_phone_post(httpd_req_t *req)
         json_int(root, "ring_duration_s", cfg.phone.ring_duration_s), 5, 120);
     cfg.phone.call_timeout_s = (uint16_t)clamp_int(
         json_int(root, "call_timeout_s", cfg.phone.call_timeout_s), 0, 3600);
+    cfg.ring.ringtone = (uint8_t)clamp_int(
+        json_int(root, "ringtone", cfg.ring.ringtone), 0, RINGTONE_COUNT - 1);
+    cfg.ring.ring_volume = (uint8_t)clamp_int(
+        json_int(root, "ring_volume", cfg.ring.ring_volume), 0, 100);
+    cfg.keytone.key_volume = (uint8_t)clamp_int(
+        json_int(root, "key_volume", cfg.keytone.key_volume), 0, 100);
 
     cJSON *dtmf = cJSON_GetObjectItemCaseSensitive(root, "dtmf_mode");
     if (cJSON_IsString(dtmf) && dtmf->valuestring != NULL) {
@@ -561,8 +572,15 @@ static esp_err_t api_config_phone_post(httpd_req_t *req)
         return json_error(req, "500 Internal Server Error", "failed to save configuration");
     }
 
-    ESP_LOGI(TAG, "[WEB] Phone settings updated (speed dial '%s', auto answer %d)",
-             cfg.phone.default_number, (int)cfg.phone.auto_answer);
+    esp_err_t applied = phone_control_apply_settings();
+    if (applied != ESP_OK) {
+        ESP_LOGW(TAG, "[WEB] Settings saved but not applied live: %s",
+                 esp_err_to_name(applied));
+    }
+
+    ESP_LOGI(TAG, "[WEB] Phone settings updated (speed dial '%s', auto answer %d, ring tone %u)",
+             cfg.phone.default_number, (int)cfg.phone.auto_answer,
+             (unsigned)cfg.ring.ringtone);
     return json_ok(req, "Phone settings saved");
 }
 
@@ -658,6 +676,36 @@ static esp_err_t api_call_post(httpd_req_t *req)
     return json_ok(req, act);
 }
 
+static esp_err_t api_ringtone_preview_post(httpd_req_t *req)
+{
+    if (!web_auth_check(req)) {
+        return ESP_OK;
+    }
+
+    char body[WEB_BODY_MAX + 1];
+    cJSON *root = NULL;
+    if (!read_json_body(req, body, sizeof(body), &root)) {
+        return json_error(req, "400 Bad Request", "invalid JSON body");
+    }
+
+    const phone_config_t *cfg = config_manager_get();
+    int tone = clamp_int(json_int(root, "ringtone", cfg->ring.ringtone), 0,
+                         RINGTONE_COUNT - 1);
+    int volume = clamp_int(json_int(root, "volume", cfg->ring.ring_volume), 0, 100);
+    cJSON_Delete(root);
+
+    esp_err_t err = phone_control_preview_ringtone((uint8_t)tone, (uint8_t)volume);
+    if (err == ESP_ERR_INVALID_STATE) {
+        return json_error(req, "409 Conflict", "ringtone preview needs an idle phone");
+    }
+    if (err != ESP_OK) {
+        return json_error(req, "500 Internal Server Error", esp_err_to_name(err));
+    }
+
+    ESP_LOGI(TAG, "[WEB] Ringtone preview: %s at %d%%", ringtone_name(tone), volume);
+    return json_ok(req, "Ringtone preview playing");
+}
+
 esp_err_t web_api_init(httpd_handle_t server)
 {
     static const httpd_uri_t routes[] = {
@@ -670,6 +718,7 @@ esp_err_t web_api_init(httpd_handle_t server)
         { .uri = "/api/config/phone", .method = HTTP_POST, .handler = api_config_phone_post, .user_ctx = NULL },
         { .uri = "/api/system", .method = HTTP_POST, .handler = api_system_post, .user_ctx = NULL },
         { .uri = "/api/call", .method = HTTP_POST, .handler = api_call_post, .user_ctx = NULL },
+        { .uri = "/api/ringtone/preview", .method = HTTP_POST, .handler = api_ringtone_preview_post, .user_ctx = NULL },
     };
 
     for (size_t i = 0; i < sizeof(routes) / sizeof(routes[0]); i++) {

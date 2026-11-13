@@ -18,7 +18,12 @@ esp_err_t phone_control_answer(void);
 esp_err_t phone_control_hangup(void);
 esp_err_t phone_control_reject(void);
 
-/* Auto-answer, ring timeout and call timeout policy from configuration. */
+/* Auto-answer, ring timeout, ringtone and call timeout policy from
+ * configuration. */
 esp_err_t phone_control_apply_settings(void);
+
+/* Plays one ringtone cycle so the selected tone can be heard. Only valid when
+ * the phone is idle. */
+esp_err_t phone_control_preview_ringtone(uint8_t tone, uint8_t volume);
 
 bool phone_control_is_in_call(void);

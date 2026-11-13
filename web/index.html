@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>XIAO SIP Phone</title>
-  <link rel="stylesheet" href="/style.css?v=0.2.3" />
+  <link rel="stylesheet" href="/style.css?v=0.2.4" />
 </head>
 <body>
   <header>
@@ -136,7 +136,26 @@
             <label>Ring duration (s) <input id="phone_ring_s" type="number" min="5" max="120" /></label>
           </div>
           <label>Call timeout (s, 0 = off) <input id="phone_timeout_s" type="number" min="0" max="3600" /></label>
+          <div class="row">
+            <label>Ring tone
+              <select id="phone_ringtone">
+                <option value="0">Classic (440/480 Hz)</option>
+                <option value="1">Double ring (400/450 Hz)</option>
+                <option value="2">Bell warble</option>
+                <option value="3">Chime</option>
+                <option value="4">Pulse beeps</option>
+              </select>
+            </label>
+            <label>Ring volume <span id="phone_ring_volume_val">70%</span>
+              <input id="phone_ring_volume" type="range" min="0" max="100" step="1" />
+            </label>
+          </div>
+          <label>Key tone volume <span id="phone_key_volume_val">60%</span>
+            <input id="phone_key_volume" type="range" min="0" max="100" step="1" />
+          </label>
+          <button type="button" id="ring-preview">Preview ring tone</button>
           <button type="submit">Save phone settings</button>
+          <p class="note">The ring tone and the dialpad key tone share the call speaker but each keeps its own volume, separate from the Audio tab level. A key tone of 0 mutes the dialpad.</p>
         </form>
       </article>
       <article class="card">
@@ -207,7 +226,7 @@
       }
     });
   </script>
-  <script src="/app.js?v=0.2.3"></script>
+  <script src="/app.js?v=0.2.4"></script>
   <script>
     setTimeout(function () {
       if (!window.__appReady) {

@@ -25,6 +25,8 @@
 #include "audio_driver.h"
 #include "config_manager.h"
 #include "display_driver.h"
+#include "phone_control.h"
+#include "ringtone.h"
 #include "sip_client.h"
 #include "ui_settings.h"
 #include "wifi_manager.h"
@@ -86,6 +88,13 @@ static lv_obj_t *s_brightness_label;
 static lv_obj_t *s_volume_slider;
 static lv_obj_t *s_volume_label;
 static lv_obj_t *s_gain_label;
+static lv_obj_t *s_ring_btn[RINGTONE_COUNT];
+static lv_obj_t *s_ring_name;
+static lv_obj_t *s_ring_volume_slider;
+static lv_obj_t *s_ring_volume_label;
+static lv_obj_t *s_key_volume_slider;
+static lv_obj_t *s_key_volume_label;
+static uint8_t s_ringtone;
 static lv_obj_t *s_info_label;
 static lv_obj_t *s_wifi_status;
 static lv_obj_t *s_sip_status;
@@ -516,6 +525,99 @@ static void gain_up_cb(lv_event_t *event)
     gain_apply((int8_t)(s_gain_db + 3));
 }
 
+/* ------------------------------------------------------------- ring tone */
+
+static uint8_t ring_volume_value(void)
+{
+    return (uint8_t)lv_slider_get_value(s_ring_volume_slider);
+}
+
+static void ring_refresh(void)
+{
+    for (int i = 0; i < RINGTONE_COUNT; i++) {
+        if (s_ring_btn[i] == NULL) {
+            continue;
+        }
+        lv_obj_set_style_bg_color(s_ring_btn[i],
+                                  lv_color_hex(i == (int)s_ringtone ? COL_PRIMARY : COL_CARD_HI),
+                                  0);
+    }
+    if (s_ring_name != NULL) {
+        lv_label_set_text(s_ring_name, ringtone_name((int)s_ringtone));
+    }
+}
+
+static void ring_save(void)
+{
+    const phone_config_t *cur = config_manager_get();
+    if (cur == NULL) {
+        return;
+    }
+
+    phone_config_t cfg = *cur;
+    cfg.ring.ringtone = s_ringtone;
+    cfg.ring.ring_volume = ring_volume_value();
+    if (s_key_volume_slider != NULL) {
+        cfg.keytone.key_volume = (uint8_t)lv_slider_get_value(s_key_volume_slider);
+    }
+    if (config_manager_set(&cfg) == ESP_OK) {
+        ESP_LOGI(TAG, "Ring tone '%s' at %u%%, key tone %u%% saved",
+                 ringtone_name((int)s_ringtone), (unsigned)cfg.ring.ring_volume,
+                 (unsigned)cfg.keytone.key_volume);
+    } else {
+        ESP_LOGW(TAG, "Ring tone save failed");
+    }
+}
+
+/* Hearing the tone is the only way to pick one, so every change plays it. */
+static void ring_preview(void)
+{
+    esp_err_t err = phone_control_preview_ringtone(s_ringtone, ring_volume_value());
+    if (err != ESP_OK) {
+        ESP_LOGD(TAG, "Ringtone preview skipped: %s", esp_err_to_name(err));
+    }
+}
+
+static void ringtone_select_cb(lv_event_t *event)
+{
+    s_ringtone = (uint8_t)(intptr_t)lv_event_get_user_data(event);
+    ring_refresh();
+    ring_save();
+    ring_preview();
+}
+
+static void ring_volume_changed_cb(lv_event_t *event)
+{
+    (void)event;
+    lv_label_set_text_fmt(s_ring_volume_label, "Ring volume %u%%",
+                          (unsigned)ring_volume_value());
+}
+
+static void ring_volume_released_cb(lv_event_t *event)
+{
+    (void)event;
+    ring_save();
+    ring_preview();
+}
+
+static void key_volume_changed_cb(lv_event_t *event)
+{
+    (void)event;
+    lv_label_set_text_fmt(s_key_volume_label, "Key tone %u%%",
+                          (unsigned)lv_slider_get_value(s_key_volume_slider));
+}
+
+static void key_volume_released_cb(lv_event_t *event)
+{
+    (void)event;
+    ring_save();
+
+    uint8_t volume = (uint8_t)lv_slider_get_value(s_key_volume_slider);
+    if (volume > 0) {
+        ringtone_play_key('5', volume); /* hear the level that was just chosen */
+    }
+}
+
 /* ------------------------------------------------------------------- SIP */
 
 static void sip_save_cb(lv_event_t *event)
@@ -777,8 +879,54 @@ static void build_display_page(void)
     make_button(audio_card, 186, 80, 60, 24, "+3", COL_CARD_HI, COL_PRIMARY,
                 &lv_font_montserrat_14, gain_up_cb, NULL);
 
-    make_label(s_page_display, 8, 236, &lv_font_montserrat_14, COL_DIM,
-               "Volume and gain are saved to NVS.");
+    lv_obj_t *ring_card = make_card(s_page_display, 8, 228, 256, 190);
+    make_label(ring_card, 10, 6, &lv_font_montserrat_14, COL_TEXT, "Ring tone");
+    s_ringtone = cfg ? cfg->ring.ringtone : RINGTONE_DEFAULT;
+    if (s_ringtone >= RINGTONE_COUNT) {
+        s_ringtone = RINGTONE_DEFAULT;
+    }
+    s_ring_name = make_label(ring_card, 10, 26, &lv_font_montserrat_14, COL_DIM, "");
+    lv_label_set_text(s_ring_name, ringtone_name((int)s_ringtone));
+
+    for (int i = 0; i < RINGTONE_COUNT; i++) {
+        char text[2] = {(char)('1' + i), '\0'};
+        s_ring_btn[i] = make_button(ring_card, 10 + i * 50, 46, 46, 26, text, COL_CARD_HI,
+                                    COL_PRIMARY, &lv_font_montserrat_14, ringtone_select_cb,
+                                    (void *)(intptr_t)i);
+    }
+    /* Highlight the stored tone without playing it. */
+    for (int i = 0; i < RINGTONE_COUNT; i++) {
+        lv_obj_set_style_bg_color(s_ring_btn[i],
+                                  lv_color_hex(i == (int)s_ringtone ? COL_PRIMARY : COL_CARD_HI),
+                                  0);
+    }
+
+    uint8_t ring_volume = cfg ? cfg->ring.ring_volume : RINGTONE_DEFAULT_VOLUME;
+    if (ring_volume > 100) {
+        ring_volume = 100;
+    }
+    s_ring_volume_label = make_label(ring_card, 10, 80, &lv_font_montserrat_14, COL_TEXT, "");
+    lv_label_set_text_fmt(s_ring_volume_label, "Ring volume %u%%", (unsigned)ring_volume);
+    s_ring_volume_slider = make_slider(ring_card, 10, 102, 236, 0, 100, ring_volume);
+    lv_obj_add_event_cb(s_ring_volume_slider, ring_volume_changed_cb,
+                        LV_EVENT_VALUE_CHANGED, NULL);
+    lv_obj_add_event_cb(s_ring_volume_slider, ring_volume_released_cb, LV_EVENT_RELEASED, NULL);
+
+    make_label(ring_card, 10, 122, &lv_font_montserrat_14, COL_DIM, "Tap a tone to hear it");
+
+    uint8_t key_volume = cfg ? cfg->keytone.key_volume : KEY_TONE_DEFAULT_VOLUME;
+    if (key_volume > 100) {
+        key_volume = 100;
+    }
+    s_key_volume_label = make_label(ring_card, 10, 142, &lv_font_montserrat_14, COL_TEXT, "");
+    lv_label_set_text_fmt(s_key_volume_label, "Key tone %u%%", (unsigned)key_volume);
+    s_key_volume_slider = make_slider(ring_card, 10, 164, 236, 0, 100, key_volume);
+    lv_obj_add_event_cb(s_key_volume_slider, key_volume_changed_cb,
+                        LV_EVENT_VALUE_CHANGED, NULL);
+    lv_obj_add_event_cb(s_key_volume_slider, key_volume_released_cb, LV_EVENT_RELEASED, NULL);
+
+    make_label(s_page_display, 8, 424, &lv_font_montserrat_14, COL_DIM,
+               "Ring and key tones are saved to NVS.");
 }
 
 static void build_sip_page(void)

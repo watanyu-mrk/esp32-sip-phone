@@ -80,6 +80,13 @@ static void config_defaults(phone_config_t *cfg)
     /* Default credentials: change them from the web UI once it exists. */
     copy_str(cfg->system.web_user, sizeof(cfg->system.web_user), "admin");
     copy_str(cfg->system.web_password, sizeof(cfg->system.web_password), "admin");
+
+    cfg->ring.magic = RING_CONFIG_MAGIC;
+    cfg->ring.ringtone = 0;      /* Classic, see ringtone.h */
+    cfg->ring.ring_volume = 70;
+
+    cfg->keytone.magic = KEYTONE_CONFIG_MAGIC;
+    cfg->keytone.key_volume = 60;
 }
 
 esp_err_t config_manager_load(void)
@@ -98,17 +105,69 @@ esp_err_t config_manager_load(void)
     }
 
     phone_config_t loaded;
+    memset(&loaded, 0, sizeof(loaded));
     size_t len = sizeof(loaded);
     err = nvs_get_blob(handle, NVS_KEY, &loaded, &len);
     nvs_close(handle);
 
-    if (err != ESP_OK || len != sizeof(loaded) || loaded.version != CONFIG_SCHEMA_VERSION) {
+    if (err != ESP_OK || len > sizeof(loaded) || loaded.version != CONFIG_SCHEMA_VERSION) {
         ESP_LOGW(TAG, "[SYSTEM] Stored configuration missing or incompatible, restoring defaults");
         config_defaults(&s_config);
         return config_manager_save();
     }
 
-    memcpy(&s_config, &loaded, sizeof(s_config));
+    bool migrated = false;
+    if (len < sizeof(loaded)) {
+        /* New settings are appended to phone_config_t, so the stored bytes are
+         * a valid prefix: keep the existing account and Wi-Fi credentials and
+         * fill the appended fields from the defaults. The prefix may still land
+         * on an appended block when struct padding differs, so the field checks
+         * below run for this path too. */
+        phone_config_t patched;
+        config_defaults(&patched);
+        memcpy(&patched, &loaded, len);
+        memcpy(&s_config, &patched, sizeof(s_config));
+        ESP_LOGI(TAG, "[SYSTEM] Configuration migrated from an older build (%u -> %u bytes)",
+                 (unsigned)len, (unsigned)sizeof(s_config));
+        migrated = true;
+    } else {
+        memcpy(&s_config, &loaded, sizeof(s_config));
+    }
+
+    /* A blob written before the ringtone existed carries whatever padding sat
+     * there (usually zeros), which would read back as a silent ringtone. The
+     * magic byte distinguishes a real setting from that leftover. */
+    bool repaired = false;
+    if (s_config.ring.magic != RING_CONFIG_MAGIC) {
+        ESP_LOGW(TAG, "[SYSTEM] Ringtone settings were unset, applying defaults");
+        s_config.ring.magic = RING_CONFIG_MAGIC;
+        s_config.ring.ringtone = 0;
+        s_config.ring.ring_volume = 70;
+        repaired = true;
+    }
+    if (s_config.ring.ringtone >= 5) {
+        s_config.ring.ringtone = 0;
+        repaired = true;
+    }
+    if (s_config.ring.ring_volume > 100) {
+        s_config.ring.ring_volume = 70;
+        repaired = true;
+    }
+    if (s_config.keytone.magic != KEYTONE_CONFIG_MAGIC) {
+        ESP_LOGW(TAG, "[SYSTEM] Key tone settings were unset (magic 0x%02x), applying defaults",
+                 (unsigned)s_config.keytone.magic);
+        s_config.keytone.magic = KEYTONE_CONFIG_MAGIC;
+        s_config.keytone.key_volume = 60;
+        repaired = true;
+    }
+    if (s_config.keytone.key_volume > 100) {
+        s_config.keytone.key_volume = 60;
+        repaired = true;
+    }
+    if (migrated || repaired) {
+        return config_manager_save();
+    }
+
     ESP_LOGI(TAG, "[SYSTEM] Configuration loaded from NVS");
     return ESP_OK;
 }

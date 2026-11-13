@@ -84,6 +84,28 @@ typedef struct {
     char web_password[CFG_SECRET_LEN];
 } system_config_t;
 
+/* The ringtone shares the speaker with the call audio, so its level is kept
+ * apart from audio.speaker_volume. */
+#define RING_CONFIG_MAGIC 0x52 /* 'R': these fields have been written once */
+
+typedef struct {
+    uint8_t magic;       /* RING_CONFIG_MAGIC, see config_manager_load() */
+    uint8_t ringtone;    /* 0..4, see ringtone.h */
+    uint8_t ring_volume; /* 0-100 */
+    uint8_t reserved;
+} ring_config_t;
+
+/* The dialpad key tone has its own block: a field added inside ring_config_t
+ * would land on the old padding byte, which reads back as a silent keypad.
+ * A separate magic makes "never written" detectable. */
+#define KEYTONE_CONFIG_MAGIC 0x4B /* 'K' */
+
+typedef struct {
+    uint8_t magic;      /* KEYTONE_CONFIG_MAGIC */
+    uint8_t key_volume; /* 0-100, 0 = silent */
+    uint8_t reserved[2];
+} keytone_config_t;
+
 typedef struct {
     uint16_t version; /* CONFIG_SCHEMA_VERSION, for future migration */
     phone_wifi_config_t wifi;
@@ -91,6 +113,10 @@ typedef struct {
     audio_config_t audio;
     phone_settings_t phone;
     system_config_t system;
+    /* Appended after the original fields: a blob written by an older build is
+     * a valid prefix and is migrated instead of discarded. */
+    ring_config_t ring;
+    keytone_config_t keytone;
 } phone_config_t;
 
 /* Initialises NVS (erasing/recovering it if needed), then loads the stored

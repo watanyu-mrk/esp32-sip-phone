@@ -115,6 +115,11 @@ async function loadConfig() {
     setValue("phone_auto_delay", c.phone.auto_answer_delay_ms);
     setValue("phone_ring_s", c.phone.ring_duration_s);
     setValue("phone_timeout_s", c.phone.call_timeout_s);
+    setValue("phone_ringtone", c.phone.ringtone);
+    setValue("phone_ring_volume", c.phone.ring_volume);
+    setValue("phone_key_volume", c.phone.key_volume);
+    updateRingVolumeLabel();
+    updateKeyVolumeLabel();
   }
 
   setValue("sys_device_name", c.system.device_name);
@@ -188,6 +193,9 @@ function wireForms() {
     auto_answer_delay_ms: Number($("phone_auto_delay").value),
     ring_duration_s: Number($("phone_ring_s").value),
     call_timeout_s: Number($("phone_timeout_s").value),
+    ringtone: Number($("phone_ringtone").value),
+    ring_volume: Number($("phone_ring_volume").value),
+    key_volume: Number($("phone_key_volume").value),
   }), "Phone settings saved");
 
   submitForm("system-form", "/api/config/admin", () => ({
@@ -228,7 +236,36 @@ async function callAction(action) {
   }
 }
 
+function updateRingVolumeLabel() {
+  const slider = $("phone_ring_volume");
+  setText("phone_ring_volume_val", `${slider.value}%`);
+}
+
+function updateKeyVolumeLabel() {
+  const slider = $("phone_key_volume");
+  setText("phone_key_volume_val", `${slider.value}%`);
+}
+
+async function previewRingtone() {
+  try {
+    const result = await api("/api/ringtone/preview", {
+      method: "POST",
+      body: JSON.stringify({
+        ringtone: Number($("phone_ringtone").value),
+        volume: Number($("phone_ring_volume").value),
+      }),
+    });
+    toast(result.message || "Preview playing");
+  } catch (err) {
+    toast(err.message, true);
+  }
+}
+
 function wireActions() {
+  $("phone_ring_volume").addEventListener("input", updateRingVolumeLabel);
+  $("phone_key_volume").addEventListener("input", updateKeyVolumeLabel);
+  $("ring-preview").addEventListener("click", previewRingtone);
+
   $("call-dial").addEventListener("click", () => callAction("dial"));
   $("call-answer").addEventListener("click", () => callAction("answer"));
   $("call-hangup").addEventListener("click", () => callAction("hangup"));
