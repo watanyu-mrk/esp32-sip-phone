@@ -46,6 +46,10 @@ static const char *TAG = "SIP";
 #define SIP_RTX_MAX       6
 #define SIP_T1_MS         500
 #define SIP_REG_RETRY_MS  30000
+/* Callee side: probe an established dialog and give up on a caller that
+ * disappeared without a BYE (two unanswered probes ~= 45 s of silence). */
+#define SIP_PING_MS        15000
+#define SIP_PING_MAX_MISS  2
 
 typedef struct {
     char host[CFG_SERVER_LEN];
@@ -131,7 +135,19 @@ static uint8_t s_pt;
 static uint32_t s_dlg_cseq;
 static char s_dlg_msg[2048];
 static size_t s_dlg_msg_len;
+static struct sockaddr_in s_dlg_dst;    /* where s_dlg_msg went, for retransmits */
 static char s_inv_branch[48];
+
+/* Teardown transactions: the BYE, the CANCEL and the 486 for a rejected
+ * INVITE are retransmitted, and the call is released locally if the far end
+ * never answers, so none of them can leave the phone stuck in TERMINATING. */
+static int s_teardown_rtx_n;
+static int64_t s_teardown_rtx_at;
+static bool s_cancelled;   /* CANCEL sent, waiting for 200 to CANCEL / 487 */
+static bool s_rejected;    /* 486 sent, waiting for the caller's ACK */
+static bool s_ack_pending; /* 200 OK sent, waiting for the caller's ACK */
+static int s_ping_missed;  /* unanswered in-dialog OPTIONS */
+static int64_t s_ping_due_at;
 
 /* INVITE digest state is kept apart from the registration challenge so a
  * REGISTER refresh cannot invalidate an in-flight call setup. */
@@ -772,21 +788,74 @@ static void end_call(void)
     s_remote_to[0] = '\0';
     s_pending_invite.call_id[0] = '\0';
     s_dlg_rtx_at = 0;
+    s_teardown_rtx_at = 0;
+    s_teardown_rtx_n = 0;
+    s_cancelled = false;
+    s_rejected = false;
+    s_ack_pending = false;
+    s_ping_due_at = 0;
+    s_ping_missed = 0;
     s_answer_len = 0;
     s_peer[0] = '\0';
     set_call_state(SIP_CALL_IDLE);
     ESP_LOGI(TAG, "[PHONE] State: IDLE");
 }
 
+/* Starts retransmission of the stored teardown message (BYE, CANCEL or 486) and
+ * guarantees the state machine returns to IDLE even if it is never answered. */
+static void start_teardown(void)
+{
+    s_teardown_rtx_n = 0;
+    s_teardown_rtx_at = now_ms() + SIP_T1_MS;
+}
+
+/* Dead-peer detection for a call we answered: one in-dialog OPTIONS every
+ * SIP_PING_MS, and any packet of this dialog resets the miss counter. */
+static void start_ping(void)
+{
+    s_ping_missed = 0;
+    s_ping_due_at = now_ms() + SIP_PING_MS;
+}
+
+/* Bare SIP URI for a request line. s_remote_uri holds whichever header it was
+ * learned from (the Contact of a 200 OK, or the caller's Contact for an
+ * incoming INVITE), so it can still carry a display name, angle brackets and
+ * header parameters. Those are legal in a header but not in a Request-URI: a
+ * BYE whose request line was `BYE "100" <sip:100@10.0.0.5:5060>` is dropped by
+ * the peer, which left a call answered on this side stuck in TERMINATING. */
+static void dialog_request_uri(char *out, size_t out_sz)
+{
+    out[0] = '\0';
+    const char *start = s_remote_uri;
+    if (start[0] == '\0') {
+        snprintf(out, out_sz, "sip:%s@%s:%u", s_acc.user, s_acc.host,
+                 (unsigned)s_acc.port);
+        return;
+    }
+
+    const char *lt = strchr(start, '<');
+    if (lt != NULL) {
+        start = lt + 1;
+    } else {
+        const char *scheme = strstr(start, "sip:");
+        if (scheme != NULL) {
+            start = scheme;
+        }
+    }
+
+    size_t n = strcspn(start, ">; \t\r\n");
+    if (n >= out_sz) {
+        n = out_sz - 1;
+    }
+    memcpy(out, start, n);
+    out[n] = '\0';
+}
+
 static void send_simple_request(const char *method, uint32_t cseq, const char *to_tag,
                                 const char *branch)
 {
     char uri[192];
-    copy_str(uri, sizeof(uri), s_remote_uri[0] ? s_remote_uri : "");
-    if (uri[0] == '\0') {
-        snprintf(uri, sizeof(uri), "sip:%s@%s:%u", s_acc.user, s_acc.host,
-                 (unsigned)s_acc.port);
-    }
+    dialog_request_uri(uri, sizeof(uri));
 
     char br[48];
     if (branch != NULL) {
@@ -827,8 +896,18 @@ static void send_simple_request(const char *method, uint32_t cseq, const char *t
            s_dlg_call_id,
            (unsigned)cseq, method);
 
-    udp_send_to(s_peer_direct ? &s_peer_addr : &s_dst, buf, len);
-    ESP_LOGI(TAG, "[SIP] %s sent", method);
+    const struct sockaddr_in *dst = s_peer_direct ? &s_peer_addr : &s_dst;
+    udp_send_to(dst, buf, len);
+    ESP_LOGI(TAG, "[SIP] %s sent to %s", method, uri);
+
+    if (strcmp(method, "BYE") == 0 || strcmp(method, "CANCEL") == 0) {
+        /* Keep the exact bytes and destination so the request can be
+         * retransmitted and the call released locally if no final response
+         * ever arrives. */
+        s_dlg_dst = *dst;
+        memcpy(s_dlg_msg, buf, len);
+        s_dlg_msg_len = len;
+    }
 }
 
 static void send_ack(void)
@@ -883,6 +962,8 @@ static void send_bye(void)
     s_dlg_cseq++;
     send_simple_request("BYE", s_dlg_cseq, s_remote_tag, NULL);
     set_call_state(SIP_CALL_TERMINATING);
+    s_ack_pending = false;    /* the pending 200 OK retransmit is superseded */
+    start_teardown();
 }
 
 static void send_response_to(const struct sockaddr_in *dst, const sip_msg_t *req, int code,
@@ -919,7 +1000,9 @@ static void send_response_to(const struct sockaddr_in *dst, const sip_msg_t *req
     }
 
     udp_send_to((dst != NULL) ? dst : &s_reply_to, buf, len);
-    if (code == 200 && req->status == 0) {
+    /* Keep the final response to the INVITE so it can be replayed when the
+     * caller retransmits it (an answered call, or one we just rejected). */
+    if (req->status == 0 && (code == 200 || code == 486)) {
         memcpy(s_answer_msg, buf, len);
         s_answer_len = len;
     }
@@ -1046,6 +1129,15 @@ static void handle_invite_response(const sip_msg_t *m)
             send_ack();
             return;
         }
+        if (s_cancelled) {
+            /* We cancelled but the callee had already answered: the INVITE
+             * cannot be cancelled any more, so ACK it and send BYE. */
+            ESP_LOGW(TAG, "[SIP] Cancelled call was answered, hanging up");
+            send_ack();
+            s_cancelled = false;
+            send_bye();
+            return;
+        }
         if (m->body != NULL && m->body_len > 0) {
             char ip[16];
             uint16_t port;
@@ -1108,6 +1200,13 @@ static void handle_invite_response(const sip_msg_t *m)
     }
 
     /* Other 3xx-6xx: acknowledge, then drop the call. */
+    if (s_cancelled) {
+        /* 487 for the INVITE we cancelled: normal completion of the CANCEL. */
+        ESP_LOGI(TAG, "[SIP] Call cancelled (%d %s)", m->status, m->start_line);
+        send_ack_for(m->cseq_num);
+        end_call();
+        return;
+    }
     ESP_LOGW(TAG, "[SIP] Call failed: %d %s", m->status, m->start_line);
     send_ack_for(m->cseq_num);
     end_call();
@@ -1185,6 +1284,20 @@ static void handle_request(const sip_msg_t *req)
     if (strcasecmp(req->method, "ACK") == 0) {
         if (strcmp(req->call_id, s_dlg_call_id) == 0) {
             ESP_LOGI(TAG, "[SIP] ACK received");
+            if (s_rejected) {
+                /* ACK for our 486: the reject transaction is complete. */
+                end_call();
+                return;
+            }
+            if (s_ack_pending) {
+                /* Caller confirmed our 200 OK: stop retransmitting it and
+                 * start watching for a caller that leaves without a BYE. */
+                s_ack_pending = false;
+                s_teardown_rtx_at = 0;
+                s_teardown_rtx_n = 0;
+                start_ping();
+                return;
+            }
             if (s_call == SIP_CALL_ESTABLISHED || s_call == SIP_CALL_TERMINATING) {
                 return;
             }
@@ -1240,8 +1353,12 @@ static void handle_response(const sip_msg_t *m)
             end_call();
         }
     } else if (strcasecmp(m->cseq_method, "CANCEL") == 0) {
-        /* The matching 487 for the INVITE ends the call. */
         ESP_LOGD(TAG, "[SIP] CANCEL response %d", m->status);
+        /* The 487 for the INVITE usually ends the call, but a peer that only
+         * answers the CANCEL must not leave us waiting in TERMINATING. */
+        if (m->status >= 200 && s_cancelled) {
+            end_call();
+        }
     }
 }
 
@@ -1252,6 +1369,13 @@ static void handle_packet(char *buf, int len, const struct sockaddr_in *from)
     static sip_msg_t m;
     s_reply_to = *from;
     parse_msg(buf, &m);
+
+    /* Any packet of the answered dialog proves the caller is still there. */
+    if (s_ping_due_at != 0 && m.call_id[0] != '\0' &&
+        strcmp(m.call_id, s_dlg_call_id) == 0) {
+        s_ping_missed = 0;
+        s_ping_due_at = now_ms() + SIP_PING_MS;
+    }
 
     ESP_LOGD(TAG, "[SIP] RX %d bytes: %s", len, m.start_line);
 
@@ -1381,6 +1505,41 @@ static void sip_task(void *arg)
                 s_dlg_rtx_at = 0;
                 ESP_LOGE(TAG, "[SIP] Call failed: no response");
                 end_call();
+            }
+        }
+
+        /* A BYE the peer never answers (lost packet, or a request it could not
+         * match) used to leave the phone on ENDING until the far end hung up. */
+        if (s_teardown_rtx_at != 0 && now >= s_teardown_rtx_at) {
+            if (s_teardown_rtx_n < SIP_RTX_MAX) {
+                s_teardown_rtx_n++;
+                int delay = SIP_T1_MS << ((s_teardown_rtx_n < 3) ? s_teardown_rtx_n : 2);
+                s_teardown_rtx_at = now + delay;
+                udp_send_to(&s_dlg_dst, s_dlg_msg, s_dlg_msg_len);
+                ESP_LOGW(TAG, "[SIP] Teardown retransmit %d", s_teardown_rtx_n);
+            } else {
+                s_teardown_rtx_at = 0;
+                ESP_LOGW(TAG, "[SIP] Teardown unanswered, releasing the call locally");
+                end_call();
+            }
+        }
+
+        /* Callee-side watchdog: a caller that vanishes without a BYE would
+         * otherwise leave the phone in a one-sided call forever. */
+        if (s_ping_due_at != 0 && now >= s_ping_due_at) {
+            if (s_call != SIP_CALL_ESTABLISHED) {
+                s_ping_due_at = 0;
+            } else if (s_ping_missed >= SIP_PING_MAX_MISS) {
+                s_ping_due_at = 0;
+                ESP_LOGW(TAG, "[SIP] Caller stopped answering, ending the call");
+                end_call();
+            } else {
+                s_ping_missed++;
+                s_ping_due_at = now + SIP_PING_MS;
+                s_dlg_cseq++;
+                send_simple_request("OPTIONS", s_dlg_cseq, s_remote_tag, NULL);
+                ESP_LOGI(TAG, "[SIP] Dialog keepalive %d/%d", s_ping_missed,
+                         SIP_PING_MAX_MISS);
             }
         }
     }
@@ -1551,6 +1710,17 @@ esp_err_t sip_client_answer(void)
     set_call_state(SIP_CALL_ESTABLISHED);
     ESP_LOGI(TAG, "[PHONE] State: CONNECTED");
     media_start();
+
+    /* The dialog is only confirmed by the caller's ACK. Retransmit the 200 OK
+     * and release the call if it never comes, instead of sitting in a
+     * one-sided IN CALL with media running to a caller that is not there. */
+    if (s_answer_len > 0 && s_answer_len <= sizeof(s_dlg_msg)) {
+        s_dlg_dst = s_invite_reply;
+        memcpy(s_dlg_msg, s_answer_msg, s_answer_len);
+        s_dlg_msg_len = s_answer_len;
+        s_ack_pending = true;
+        start_teardown();
+    }
     return ESP_OK;
 }
 
@@ -1566,7 +1736,10 @@ esp_err_t sip_client_hangup(void)
         s_dlg_cseq++;
         send_simple_request("CANCEL", s_dlg_cseq, s_remote_tag, s_inv_branch);
         ESP_LOGI(TAG, "[SIP] Cancelling call");
-        end_call();
+        s_dlg_rtx_at = 0;    /* stop retransmitting the INVITE we just cancelled */
+        s_cancelled = true;
+        set_call_state(SIP_CALL_TERMINATING);
+        start_teardown();
         return ESP_OK;
 
     case SIP_CALL_ESTABLISHED:
@@ -1574,10 +1747,26 @@ esp_err_t sip_client_hangup(void)
         send_bye();
         return ESP_OK;
 
+    case SIP_CALL_TERMINATING:
+        /* A teardown request (BYE, CANCEL or 486) is still in flight: pressing
+         * hangup again drops it locally instead of freezing on ENDING. */
+        ESP_LOGW(TAG, "[SIP] Forcing local teardown while terminating");
+        end_call();
+        return ESP_OK;
+
     case SIP_CALL_RINGING_INCOMING:
         send_response(&s_pending_invite, 486, "Busy Here", NULL, NULL, NULL);
         ESP_LOGI(TAG, "[SIP] Call rejected");
-        end_call();
+        /* Wait (briefly) for the caller's ACK so a retransmitted INVITE still
+         * gets the 486 instead of ringing again; end_call() on ACK or timeout. */
+        s_rejected = true;
+        s_dlg_dst = s_invite_reply;
+        if (s_answer_len > 0 && s_answer_len <= sizeof(s_dlg_msg)) {
+            memcpy(s_dlg_msg, s_answer_msg, s_answer_len);
+            s_dlg_msg_len = s_answer_len;
+        }
+        set_call_state(SIP_CALL_TERMINATING);
+        start_teardown();
         return ESP_OK;
 
     default:
